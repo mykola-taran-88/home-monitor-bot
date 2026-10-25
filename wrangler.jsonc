@@ -1,0 +1,32 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "home-monitor-bot",
+  "main": "srs/index.js",
+  "compatibility_date": "2026-10-25",
+  "workers_dev": true,
+  "observability": {
+    "enabled": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "DB",
+      "database_id": "a572cb01-5eaa-49cf-8646-ef4fba5b59f0"
+    }
+  ],
+  "ai": {
+    "binding": "AI"
+  },
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+  "secrets": {
+    "required": [
+      "TELEGRAM_BOT_TOKEN",
+      "TELEGRAM_CHAT_ID",
+      "WEBHOOK_SECRET",
+      "AGENT_SECRET",
+      "SETUP_SECRET"
+    ]
+  }
+}

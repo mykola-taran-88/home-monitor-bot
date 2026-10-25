@@ -1963,6 +1963,11 @@ export default {
         token: !!e.TELEGRAM_BOT_TOKEN,
       });
     if (u.pathname === "/setup") {
+      if (
+        !e.SETUP_SECRET ||
+        req.headers.get("Authorization") !== `Bearer ${e.SETUP_SECRET}`
+      )
+        return new Response("Unauthorized", { status: 401 });
       const o = u.origin,
         p = {
           url: `${o}/webhook`,

@@ -1,0 +1,7 @@
+# Copy this file to .dev.vars for local development and fill in real values.
+# Never commit .dev.vars.
+TELEGRAM_BOT_TOKEN=8970772845:AAEu6LOLwc2wxdYpaAke8sp1Ghy43XjOgK4
+TELEGRAM_CHAT_ID=1029473173
+WEBHOOK_SECRET=e5f0fe2a89b36381d73840af9cb2bbc559155acbeb5f8b6be57ef7a85a3074e6
+AGENT_SECRET=a18c04505ecc4f6a68c028a2a09319f2daecc990e24a2c8d2a3f00b353405132
+SETUP_SECRET=9ac85407124706d0df4e3f2c621b85ce5f7f1f0c04f9b29015af0bac63ca518c
