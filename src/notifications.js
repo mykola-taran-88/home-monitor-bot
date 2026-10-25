@@ -1,4 +1,5 @@
 import { now } from "./database.js";
+import { n } from "./constants.js";
 import { send } from "./telegram.js";
 import { sendChartPack } from "./reports.js";
 
@@ -40,7 +41,14 @@ export function quiet(ch, p) {
     ? p.time >= ch.quiet_start && p.time < ch.quiet_end
     : p.time >= ch.quiet_start || p.time < ch.quiet_end;
 }
-export async function push(e, cat, key, msg, critical = false) {
+export async function push(
+  e,
+  cat,
+  key,
+  msg,
+  critical = false,
+  bypassCooldown = false,
+) {
   const s = await e.DB.prepare(
     "SELECT * FROM notification_settings WHERE category_key=?",
   )
@@ -64,12 +72,17 @@ export async function push(e, cat, key, msg, critical = false) {
         .bind(dedupe, c.chat_id)
         .first();
     if (already && !repeatable) continue;
-    const recent = await e.DB.prepare(
+    const configuredCooldown = n(s.cooldown, 60) || 60,
+      cooldown =
+        cat === "recommendations"
+          ? Math.max(720, configuredCooldown)
+          : configuredCooldown,
+      recent = await e.DB.prepare(
       "SELECT 1 ok FROM notification_log WHERE chat_id=? AND category_key=? AND sent_at>=datetime(\'now\',?) LIMIT 1",
     )
-      .bind(c.chat_id, cat, `-${s.cooldown || 60} minutes`)
+      .bind(c.chat_id, cat, `-${cooldown} minutes`)
       .first();
-    if (recent && !critical) continue;
+    if (recent && !critical && !bypassCooldown) continue;
     if (!critical && quiet(c, p)) {
       await e.DB.prepare(
         "INSERT OR IGNORE INTO notification_queue(chat_id,category_key,message,dedupe,status,deliver_after) VALUES(?,?,?,?,\'pending\',datetime(\'now\',\'+8 hours\'))",
@@ -121,9 +134,23 @@ export async function stateEvent(
     .bind(key, next)
     .run();
   if (active)
-    await push(e, cat, `${stateKey}:on:${Date.now()}`, onMessage, critical);
+    await push(
+      e,
+      cat,
+      `${stateKey}:on:${Date.now()}`,
+      onMessage,
+      critical,
+      cat === "device_health",
+    );
   else if (prev === "active" && offMessage)
-    await push(e, cat, `${stateKey}:off:${Date.now()}`, offMessage, false);
+    await push(
+      e,
+      cat,
+      `${stateKey}:off:${Date.now()}`,
+      offMessage,
+      false,
+      cat === "device_health",
+    );
   return true;
 }
 export async function maintenance(e, p) {

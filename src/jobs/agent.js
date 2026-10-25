@@ -32,7 +32,7 @@ export async function agent(e) {
         offlineIds.has(id) ||
         age(z.created_at) == null ||
         age(z.created_at) > 15;
-    await stateEvent(
+    const changed = await stateEvent(
       e,
       `sensor:${id}`,
       isOffline,
@@ -40,7 +40,35 @@ export async function agent(e) {
       `📡 ${z.device_name || id}: датчик offline.`,
       `✅ ${z.device_name || id}: датчик знову online.`,
     );
+    if (isOffline && !changed)
+      await push(
+        e,
+        "device_health",
+        `sensor-current:${id}`,
+        `📡 ${z.device_name || id}: датчик offline.`,
+        false,
+        true,
+      );
   }
+  const powerOffline =
+    !x.power?.created_at || age(x.power.created_at) > 15,
+    powerChanged = await stateEvent(
+      e,
+      "power-meter",
+      powerOffline,
+      "device_health",
+      "⚡ Power Meter: немає даних понад 15 хв.",
+      "✅ Power Meter: передачу даних відновлено.",
+    );
+  if (powerOffline && !powerChanged)
+    await push(
+      e,
+      "device_health",
+      "power-meter-current",
+      "⚡ Power Meter: немає даних понад 15 хв.",
+      false,
+      true,
+    );
   const max = n(
       (
         await e.DB.prepare(
@@ -74,6 +102,7 @@ export async function agent(e) {
     `✅ Ризик дощу знизився до ${rainProb}%.`,
   );
   for (const r of x.recs) {
+    if (r.category === "device_health") continue;
     const stable = String(
       r.recommendation_key ||
         `${r.category || "general"}:${r.room_id || "home"}:${r.title || "recommendation"}`,
