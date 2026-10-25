@@ -121,18 +121,16 @@ export function forecastDayLabel(date) {
   }).format(new Date(date + "T12:00:00Z"));
 }
 export async function weatherTextRich(e) {
-  const x = await latest(e),
+  const from = kyivDateTime(),
+    to = kyivDateTime(24 * 60),
+    x = await latest(e),
     rows = (
       await e.DB.prepare(
-        "SELECT * FROM weather_hourly WHERE forecast_time>=datetime('now') ORDER BY forecast_time ASC LIMIT 48",
-      ).all()
+        "SELECT * FROM weather_hourly WHERE forecast_time>=? AND forecast_time<=? ORDER BY forecast_time ASC",
+      ).bind(from, to).all()
     ).results;
-  const sorted = [...rows].sort((a, b) =>
-      String(a.forecast_time).localeCompare(String(b.forecast_time)),
-    ),
-    sampled = sorted.filter((_, i) => i % 3 === 0).slice(0, 8),
-    groups = {};
-  for (const h of sampled) {
+  const groups = {};
+  for (const h of rows) {
     const raw = String(h.forecast_time || ""),
       date = raw.slice(0, 10);
     (groups[date] ??= []).push(h);
