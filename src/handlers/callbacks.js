@@ -419,6 +419,7 @@ export async function callback(e, q) {
       "energy_cost",
       "weekly_digest",
       "monthly_digest",
+      "weather_forecast",
       "ai_insights",
       "useful_info",
     ];

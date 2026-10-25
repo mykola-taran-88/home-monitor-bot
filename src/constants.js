@@ -6,6 +6,7 @@ export const MODELS = [
 export const CATS = {
   critical_alerts: ["🔴", "Критичні алерти", "event", 30],
   weather_alerts: ["⛈️", "Небезпечна погода", "event", 180],
+  weather_forecast: ["🌦️", "Прогноз погоди та застереження", "daily", 1440, "07:00"],
   ventilation: ["💨", "Провітрювання", "event", 720],
   morning_report: ["🌅", "Ранковий звіт", "daily", 1440, "07:30"],
   evening_report: ["🌙", "Вечірній звіт", "daily", 1440, "21:30"],
@@ -49,6 +50,23 @@ export const age = (v) =>
         ),
       )
     : null;
+export const kyivDateTime = (offsetMinutes = 0) => {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Europe/Kyiv",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(new Date(Date.now() + offsetMinutes * 60000))
+      .filter((x) => x.type !== "literal")
+      .map((x) => [x.type, x.value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+};
 export const comfort = (t, h) =>
   clamp(
     100 -

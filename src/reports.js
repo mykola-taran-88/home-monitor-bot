@@ -1,4 +1,4 @@
-import { ANALYTICS, n, fmt, age, comfort } from "./constants.js";
+import { ANALYTICS, n, fmt, age, comfort, kyivDateTime } from "./constants.js";
 import { latest, score, now } from "./database.js";
 import { tg, send } from "./telegram.js";
 
@@ -164,6 +164,29 @@ export async function weatherTextRich(e) {
   ]
     .join("\n")
     .trim();
+}
+export async function weatherForecast48hText(e) {
+  const from = kyivDateTime(), to = kyivDateTime(48 * 60);
+  const rows = (
+    await e.DB.prepare(
+      "SELECT * FROM weather_hourly WHERE forecast_time>=? AND forecast_time<=? ORDER BY forecast_time ASC",
+    ).bind(from, to).all()
+  ).results;
+  if (!rows.length) return "🌦 ПРОГНОЗ ПОГОДИ НА 48 ГОДИН\nНемає актуальних погодинних даних.";
+  const groups = {};
+  for (const h of rows) {
+    const date = String(h.forecast_time || "").slice(0, 10);
+    (groups[date] ??= []).push(h);
+  }
+  const lines = ["🌦 ПРОГНОЗ ПОГОДИ НА НАСТУПНІ 48 ГОДИН", "Крок прогнозу — 3 години."];
+  for (const [date, items] of Object.entries(groups)) {
+    lines.push("", `📅 ${forecastDayLabel(date)}`);
+    for (const h of items)
+      lines.push(
+        `${String(h.forecast_time).slice(11, 16)} ${weatherEmoji(h.weather_code)} ${weatherName(h.weather_code)} · ${fmt(h.temperature)} °C · опади ${fmt(h.precipitation_probability, 0)}% · вітер ${fmt(h.wind_speed, 0)} км/год`,
+      );
+  }
+  return lines.join("\n");
 }
 export async function scoreText(e) {
   const x = await latest(e),

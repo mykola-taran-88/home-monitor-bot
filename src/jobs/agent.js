@@ -1,7 +1,7 @@
-import { CATS, age, fmt, n } from "../constants.js";
+import { CATS, age, fmt, n, kyivDateTime } from "../constants.js";
 import { schema, latest, score, now } from "../database.js";
 import { ask } from "../ai.js";
-import { analyticsText, energyText, homeSummaryRich, scoreText } from "../reports.js";
+import { analyticsText, energyText, forecastDayLabel, homeSummaryRich, scoreText, weatherForecast48hText } from "../reports.js";
 import { maintenance, push, pushChartPack, stateEvent } from "../notifications.js";
 import { live } from "../menus.js";
 import { send } from "../telegram.js";
@@ -87,6 +87,40 @@ export async function agent(e) {
     `✅ Навантаження нормалізувалося: ${fmt(x.power?.power, 0)} Вт`,
     n(x.power?.power) > max,
   );
+  const weatherRows = (
+    await e.DB.prepare(
+      "SELECT * FROM weather_hourly WHERE forecast_time>=? AND forecast_time<=? ORDER BY forecast_time ASC",
+    ).bind(kyivDateTime(115), kyivDateTime(125)).all()
+  ).results;
+  for (const h of weatherRows) {
+    const code = Number(h.weather_code),
+      probability = n(h.precipitation_probability),
+      wind = n(h.wind_speed),
+      hazards = [];
+    if (
+      probability >= 60 &&
+      (code >= 51 && code <= 86 || code >= 95 && code <= 99)
+    )
+      hazards.push(`опади ${probability}%`);
+    if (wind >= 50) hazards.push(`сильний вітер ${fmt(wind, 0)} км/год`);
+    if (code === 45 || code === 48) hazards.push("густий туман");
+    if (code >= 56 && code <= 67) hazards.push("ожеледь або крижаний дощ");
+    if (code >= 71 && code <= 77 || code === 85 || code === 86) hazards.push("снігопад");
+    if (code >= 95 && code <= 99) hazards.push("гроза");
+    if (n(h.temperature) >= 35) hazards.push(`спека ${fmt(h.temperature, 0)} °C`);
+    if (n(h.temperature) <= -15) hazards.push(`сильний мороз ${fmt(h.temperature, 0)} °C`);
+    if (!hazards.length) continue;
+    const at = String(h.forecast_time),
+      time = `${forecastDayLabel(at.slice(0, 10))} о ${at.slice(11, 16)}`;
+    await push(
+      e,
+      "weather_forecast",
+      `hazard:${at}:${hazards.join(",")}`,
+      `⚠️ ПОГОДНЕ ЗАСТЕРЕЖЕННЯ · приблизно за 2 години\nОчікується ${hazards.join("; ")} (${time}).\nБудь ласка, врахуйте це під час планування справ і пересування.`,
+      false,
+      true,
+    );
+  }
   const rainProb = n(x.daily[0]?.precipitation_probability),
     rainState = await e.DB.prepare(
       "SELECT state_value FROM agent_state WHERE state_key='event:rain'",
@@ -141,6 +175,8 @@ export async function agent(e) {
       msg = `📈 ТИЖНЕВА АНАЛІТИКА\n${await analyticsText(e, 7)}\n\n${await scoreText(e)}`;
     else if (q.category_key === "monthly_digest")
       msg = `📊 МІСЯЧНА АНАЛІТИКА\n${await analyticsText(e, 30)}\n\n${await scoreText(e)}`;
+    else if (q.category_key === "weather_forecast")
+      msg = await weatherForecast48hText(e);
     else if (q.category_key === "ai_insights")
       msg = `🧠 AI Insights\n${await ask(e, "agent", "Дай 4 важливі інсайти і практичні дії, використовуючи фактичні дані Home Monitor")}`;
     else
