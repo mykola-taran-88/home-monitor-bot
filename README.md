@@ -6,10 +6,24 @@ Cloudflare Worker for the Home Monitor Telegram bot. The worker uses the shared 
 
 1. Install Node.js and npm.
 2. Run `npm install` in this directory.
-3. Copy `.dev.vars.example` to `.dev.vars` and enter the four secret values.
+3. Copy `.dev.vars.example` to `.dev.vars` and enter the five secret values.
 4. Run `npm run dev`.
 
 The D1 database is configured in Wrangler. Local development uses Wrangler's local D1 unless remote bindings are explicitly enabled.
+
+## Source layout
+
+`src/index.js` is the Worker entry point. The rest of `src/` is split by responsibility:
+
+- `constants.js` — categories, shared formatters, and keyboards
+- `database.js` — D1 schema, queries, and home-score helpers
+- `ai.js` — Workers AI prompts and chat history
+- `reports.js` — energy, weather, analytics, and charts
+- `notifications.js` — notification delivery, deduplication, and state changes
+- `menus.js` — Telegram menu data and channel-management helpers
+- `handlers/` — callback and message handlers
+- `jobs/agent.js` — scheduled notification and maintenance work
+- `telegram.js` — Telegram Bot API calls
 
 ## Deploy
 
