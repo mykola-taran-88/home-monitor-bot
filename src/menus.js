@@ -12,18 +12,49 @@ export function help(k) {
       start:
         "🚀 ШВИДКИЙ СТАРТ\nНатискайте кнопки. Для AI просто пишіть питання. Канали додаються через Сповіщення → Канали.",
       features:
-        "🏠 МОЖЛИВОСТІ\nСтан, AI SQL, звіти, графіки, канали, inbox, timeline, snooze, ролі, режими, Live Card, аномалії.",
+        "🏠 МОЖЛИВОСТІ\nСтан дому, AI Caretaker із перевіреними фактами, Smart Morning Digest, Recommendation Center, нічний Sleep Score, пояснюваний Home Score, погода, енергія та канали.",
       channels:
         "📣 КАНАЛИ\nДодайте бота адміністратором каналу, потім використайте майстер «Додати канал».",
       notify:
-        "🔔 СПОВІЩЕННЯ\nКатегорії перемикаються кнопками. Події тихих годин потрапляють у чергу.",
+        "🔔 СПОВІЩЕННЯ\nAI Caretaker, Smart Digest, стан датчиків і небезпечна погода налаштовуються окремими категоріями. Рекомендації групуються за ключем і не повторюються без зміни.",
       schedule:
-        "🕒 РОЗКЛАДИ\nЧас Europe/Kyiv. Cron запускайте кожні 30 хвилин.",
-      ai: "🤖 AI\nПитання про історію використовують read-only SQL. Загальні питання не отримують дані дому.",
+        "🕒 РОЗКЛАДИ\nЧас Europe/Kyiv. Scheduler надолужує останній пропущений звіт та не дублює виконаний запуск.",
+      ai: "🤖 AI\nAI Caretaker групує факти про критичні події, клімат, енергію, погоду, Home Score і Sleep Score. Якщо AI недоступний, надсилається детермінований звіт. Загальні питання використовують read-only SQL.",
       security:
         "🔐 БЕЗПЕКА\nАдмін — TELEGRAM_CHAT_ID. SQL тільки SELECT. /agent/run вимагає AGENT_SECRET.",
     }[k] || "❓ Оберіть розділ довідки."
   );
+}
+export async function recommendationCenter(e, filter = "active") {
+  const clauses = {
+      critical: "r.status='active' AND r.priority='critical'",
+      today: "r.status='active' AND r.priority IN ('high','warning','medium') AND (l.snooze_until IS NULL OR l.snooze_until<=CURRENT_TIMESTAMP)",
+      later: "r.status='active' AND (l.snooze_until>CURRENT_TIMESTAMP OR r.priority IN ('low','info'))",
+      done: "r.status IN ('resolved','expired')",
+      active: "r.status='active' AND (l.snooze_until IS NULL OR l.snooze_until<=CURRENT_TIMESTAMP)",
+    },
+    rows = (await e.DB.prepare(
+      `SELECT r.*,l.occurrence_count,l.first_seen_at,l.last_seen_at,l.snooze_until,l.metadata_json lifecycle_json FROM recommendations r LEFT JOIN recommendation_lifecycle l ON l.recommendation_key=r.recommendation_key WHERE ${clauses[filter] || clauses.active} ORDER BY CASE r.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'warning' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,r.created_at DESC LIMIT 8`,
+    ).all()).results,
+    lines = [`💡 РЕКОМЕНДАЦІЇ · ${({ critical: "Критичні", today: "Сьогодні", later: "Пізніше", done: "Виконані", active: "Активні" })[filter] || "Активні"}`],
+    keyboard = [];
+  for (const r of rows) {
+    let evidence = {};
+    try { evidence = JSON.parse(r.lifecycle_json || r.metadata_json || "{}"); } catch {}
+    lines.push(`\n${r.priority === "critical" ? "🔴" : r.priority === "high" || r.priority === "warning" ? "🟠" : "ℹ️"} ${r.title}${r.room_id ? ` · ${r.room_id}` : ""}\n${r.message}${r.action ? `\nДія: ${r.action}` : ""}${r.last_seen_at ? `\nОновлено: ${r.last_seen_at}` : ""}`);
+    if (filter === "done") continue;
+    keyboard.push([{ text: "✅ Виконано", callback_data: `recdone:${r.id}` }, { text: "🔕 1 год", callback_data: `recsnooze:${r.id}:60` }, { text: "🔕 До завтра", callback_data: `recsnooze:${r.id}:tomorrow` }]);
+    keyboard.push([{ text: "📋 Деталі", callback_data: `recdetail:${r.id}` }, { text: "👎 Не корисно", callback_data: `recbad:${r.id}` }]);
+  }
+  if (!rows.length) lines.push("\nНемає рекомендацій у цій групі.");
+  keyboard.push([
+    { text: "🔴 Критичні", callback_data: "recs:critical" },
+    { text: "🟠 Сьогодні", callback_data: "recs:today" },
+  ], [
+    { text: "⏳ Пізніше", callback_data: "recs:later" },
+    { text: "✅ Виконані", callback_data: "recs:done" },
+  ], [{ text: "⬅️ Назад", callback_data: "m:home" }]);
+  return { text: lines.join("\n").slice(0, 3800), keyboard: { inline_keyboard: keyboard } };
 }
 export async function cats(e, page = 0) {
   const r = (
@@ -205,7 +236,10 @@ export async function diag(e) {
     ).first(),
     off = x.zones.filter(
       (a) => age(a.created_at) > 15 || age(a.created_at) == null,
-    ).length;
+    ).length,
+    jobs=await e.DB.prepare("SELECT last_status,COUNT(*) count,MAX(last_success_at) last_success_at,MAX(last_error) last_error FROM scheduled_jobs_state GROUP BY last_status ORDER BY last_status").all(),
+    pending=await e.DB.prepare("SELECT COUNT(*) count,MIN(flush_after) next_flush FROM event_buffer WHERE status='pending'").first(),
+    recs=await e.DB.prepare("SELECT COUNT(*) count FROM recommendations WHERE status='active'").first();
   return [
     "🩺 ДІАГНОСТИКА",
     `D1 ${e.DB ? "✅" : "⛔"}`,
@@ -214,6 +248,9 @@ export async function diag(e) {
     `Cron ${st ? st.updated_at : "немає"}`,
     `Weather ${x.weather ? "✅" : "⛔"}`,
     `Nodes ${x.zones.length - off}/${x.zones.length}`,
+    `Active recommendations ${recs?.count ?? "—"}`,
+    `Buffered event groups ${pending?.count ?? 0}${pending?.next_flush ? ` · next ${pending.next_flush}` : ""}`,
+    ...jobs.results.map(j=>`Scheduler ${j.last_status}: ${j.count} · last success ${j.last_success_at||"—"}${j.last_error?` · ${j.last_error}`:""}`),
     `Power ${x.power && age(x.power.created_at) <= 15 ? "✅" : "⛔"}`,
   ].join("\n");
 }

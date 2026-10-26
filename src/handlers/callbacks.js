@@ -1,8 +1,8 @@
 import { CATS, n, fmt, age, MAIN, HOME, ANALYTICS, EVENTS, NOTIFY, SETTINGS, HELP } from "../constants.js";
 import { latest } from "../database.js";
 import { ask } from "../ai.js";
-import { homeSummaryRich, energyText, weatherTextRich, scoreText, chart } from "../reports.js";
-import { cats, channels, channelDetails, channelCats, diag, help, live } from "../menus.js";
+import { homeSummaryRich, energyText, weatherTextRich, scoreText, chart, sleepText, caretakerReport } from "../reports.js";
+import { cats, channels, channelDetails, channelCats, diag, help, live, recommendationCenter } from "../menus.js";
 import { tg, send, edit } from "../telegram.js";
 
 export async function callback(e, q) {
@@ -11,13 +11,48 @@ export async function callback(e, q) {
     mid = q.message.message_id,
     d = q.data;
   if (d.startsWith("fb:")) {
-    const [, key, rating] = d.split(":");
-    await e.DB.prepare(
-      "INSERT INTO notification_feedback(chat_id,dedupe,rating) VALUES(?,?,?)",
-    )
-      .bind(id, key, n(rating))
-      .run();
+    const [, logId, rating] = d.split(":"),
+      row=await e.DB.prepare("SELECT dedupe FROM notification_log WHERE id=? AND chat_id=?").bind(n(logId),id).first();
+    if(row) await e.DB.prepare("INSERT INTO notification_feedback(chat_id,dedupe,rating) VALUES(?,?,?)").bind(id,row.dedupe,n(rating)).run();
     return send(e, id, "Дякую, відгук збережено.");
+  }
+  if (d.startsWith("recs:")) {
+    const view = await recommendationCenter(e, d.slice(5));
+    return edit(e, id, mid, view.text, view.keyboard);
+  }
+  if (d.startsWith("recdone:")) {
+    const rid = n(d.slice(8)), row = await e.DB.prepare("SELECT recommendation_key FROM recommendations WHERE id=? AND status='active'").bind(rid).first();
+    if (!row) return send(e, id, "Рекомендацію вже закрито.");
+    await e.DB.batch([
+      e.DB.prepare("UPDATE recommendations SET status='resolved',resolved_at=CURRENT_TIMESTAMP WHERE id=?").bind(rid),
+      e.DB.prepare("UPDATE recommendation_lifecycle SET active=0,resolved_at=CURRENT_TIMESTAMP WHERE recommendation_key=?").bind(row.recommendation_key),
+      e.DB.prepare("INSERT INTO recommendation_feedback(recommendation_key,chat_id,action) VALUES(?,?,'done')").bind(row.recommendation_key,id),
+    ]);
+    const view = await recommendationCenter(e, "active");
+    return edit(e,id,mid,view.text,view.keyboard);
+  }
+  if (d.startsWith("recsnooze:")) {
+    const [, ridText, duration] = d.split(":"), rid=n(ridText),
+      row=await e.DB.prepare("SELECT recommendation_key FROM recommendations WHERE id=? AND status='active'").bind(rid).first();
+    if (!row) return send(e,id,"Рекомендацію вже закрито.");
+    const modifier = duration === "tomorrow" ? "+1 day" : `+${Math.min(1440,Math.max(1,n(duration,60)))} minutes`;
+    await e.DB.batch([
+      e.DB.prepare("UPDATE recommendation_lifecycle SET snooze_until=datetime('now',?) WHERE recommendation_key=?").bind(modifier,row.recommendation_key),
+      e.DB.prepare("INSERT INTO recommendation_feedback(recommendation_key,chat_id,action) VALUES(?,?,?)").bind(row.recommendation_key,id,`snooze:${duration}`),
+    ]);
+    const view=await recommendationCenter(e,"active");
+    return edit(e,id,mid,view.text,view.keyboard);
+  }
+  if (d.startsWith("recbad:")) {
+    const rid=n(d.slice(7)), row=await e.DB.prepare("SELECT recommendation_key FROM recommendations WHERE id=?").bind(rid).first();
+    if (row) await e.DB.prepare("INSERT INTO recommendation_feedback(recommendation_key,chat_id,action) VALUES(?,?,'not_useful')").bind(row.recommendation_key,id).run();
+    return send(e,id,"👎 Відгук збережено. Дякую.");
+  }
+  if (d.startsWith("recdetail:")) {
+    const row=await e.DB.prepare("SELECT r.*,l.metadata_json,l.fingerprint,l.first_seen_at,l.last_seen_at FROM recommendations r LEFT JOIN recommendation_lifecycle l ON l.recommendation_key=r.recommendation_key WHERE r.id=?").bind(n(d.slice(10))).first();
+    if (!row) return send(e,id,"Рекомендацію не знайдено.");
+    let metadata={}; try { metadata=JSON.parse(row.metadata_json||"{}"); } catch {}
+    return send(e,id,`📋 ${row.title}\n${row.message}\nДія: ${row.action||"—"}\nПріоритет: ${row.priority}\nКлюч: ${row.recommendation_key}\nВперше: ${row.first_seen_at||row.created_at||"—"}\nОновлено: ${row.last_seen_at||"—"}\nДані: ${JSON.stringify(metadata).slice(0,1000)}`);
   }
   if (d.startsWith("alert:ack:")) {
     const aid = n(d.split(":")[2]);
@@ -106,6 +141,10 @@ export async function callback(e, q) {
       id,
       "Напишіть запитання звичайним текстом. Наприклад: «Коли був найбільший пік?»",
     );
+  if (d === "m:caretaker") {
+    const c=await caretakerReport(e);
+    return send(e,id,c.text,c.keyboard);
+  }
   if (d.startsWith("a:")) {
     const k = d.slice(2);
     if (k === "home") return send(e, id, await homeSummaryRich(e), HOME);
@@ -126,19 +165,10 @@ export async function callback(e, q) {
     if (k === "energy") return send(e, id, await energyText(e), HOME);
     if (k === "weather") return send(e, id, await weatherTextRich(e), HOME);
     if (k === "score") return send(e, id, await scoreText(e), HOME);
+    if (k === "night") return send(e, id, await sleepText(e), HOME);
     if (k === "recs") {
-      const x = await latest(e);
-      return send(
-        e,
-        id,
-        x.recs
-          .map(
-            (a) =>
-              `💡 ${a.title}: ${a.message}${a.action ? `\nДія: ${a.action}` : ""}`,
-          )
-          .join("\n\n") || "Немає рекомендацій",
-        HOME,
-      );
+      const view=await recommendationCenter(e,"active");
+      return send(e,id,view.text,view.keyboard);
     }
   }
   if (d.startsWith("chart:")) return chart(e, id, n(d.split(":")[1], 7));

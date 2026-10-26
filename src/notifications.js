@@ -2,6 +2,7 @@ import { now } from "./database.js";
 import { n } from "./constants.js";
 import { send } from "./telegram.js";
 import { sendChartPack } from "./reports.js";
+import { quietEndUtc as getQuietEndUtc } from "./v5/scheduler.js";
 
 export async function categoryChannels(e, cat) {
   return (
@@ -13,6 +14,8 @@ export async function categoryChannels(e, cat) {
   ).results;
 }
 export async function pushChartPack(e, cat, key, days) {
+  const setting=await e.DB.prepare("SELECT enabled FROM notification_settings WHERE category_key=?").bind(cat).first();
+  if (!setting?.enabled) return;
   const channels = await categoryChannels(e, cat);
   for (const c of channels) {
     const dedupe = `chart:${cat}:${key}:${c.chat_id}`,
@@ -35,11 +38,34 @@ export async function pushChartPack(e, cat, key, days) {
   }
 }
 
+export async function flushEventBuffer(e) {
+  const rows=(await e.DB.prepare("SELECT * FROM event_buffer WHERE status='pending' AND flush_after<=CURRENT_TIMESTAMP ORDER BY first_seen_at LIMIT 20").all()).results;
+  for (const row of rows) {
+    const claim=await e.DB.prepare("UPDATE event_buffer SET status='processing',attempt_count=attempt_count+1 WHERE id=? AND status='pending'").bind(row.id).run();
+    if (!(claim.meta?.changes>0)) continue;
+    try {
+      const payload=JSON.parse(row.payload_json||"{}"), items=payload.items||[], active=payload.active!==false,
+        heading=active?"📡 Датчики offline":"✅ Відновлення датчиків",
+        body=items.map(x=>`• ${x.message||x.name}`).join("\n"),
+        key=`event-buffer:${row.id}`;
+      const accepted=await push(e,row.category_key,key,`${heading}\n${body}`,false,false);
+      if(!accepted) throw new Error("No eligible notification channel accepted the event");
+      await e.DB.prepare("UPDATE event_buffer SET status='sent',delivered_at=CURRENT_TIMESTAMP,last_error=NULL WHERE id=?").bind(row.id).run();
+    } catch(err) {
+      await e.DB.prepare("UPDATE event_buffer SET status='pending',flush_after=datetime('now','+5 minutes'),last_error=? WHERE id=?").bind(String(err?.message||err).slice(0,500),row.id).run();
+      console.error("EVENT_BUFFER",JSON.stringify({id:row.id,error:String(err?.message||err).slice(0,250)}));
+    }
+  }
+}
+
 export function quiet(ch, p) {
   if (!ch.quiet_enabled) return false;
   return ch.quiet_start < ch.quiet_end
     ? p.time >= ch.quiet_start && p.time < ch.quiet_end
     : p.time >= ch.quiet_start || p.time < ch.quiet_end;
+}
+function quietEndUtc(ch, p) {
+  return getQuietEndUtc(ch,p,"Europe/Kyiv");
 }
 export async function push(
   e,
@@ -48,6 +74,7 @@ export async function push(
   msg,
   critical = false,
   bypassCooldown = false,
+  replyMarkup = null,
 ) {
   const s = await e.DB.prepare(
     "SELECT * FROM notification_settings WHERE category_key=?",
@@ -64,8 +91,9 @@ export async function push(
         .bind(cat)
         .all()
     ).results;
+  let accepted = false;
   for (const c of cs) {
-    const repeatable = cat === "recommendations" || cat === "ventilation",
+    const repeatable = false,
       already = await e.DB.prepare(
         "SELECT 1 ok FROM notification_log WHERE dedupe=? AND chat_id=? LIMIT 1",
       )
@@ -97,30 +125,33 @@ export async function push(
     if ((recent || recentKey) && !critical && !bypassCooldown) continue;
     if (!critical && quiet(c, p)) {
       await e.DB.prepare(
-        "INSERT OR IGNORE INTO notification_queue(chat_id,category_key,message,dedupe,status,deliver_after) VALUES(?,?,?,?,\'pending\',datetime(\'now\',\'+8 hours\'))",
+        "INSERT INTO notification_queue(chat_id,category_key,message,dedupe,status,deliver_after) VALUES(?,?,?,?,'pending',?) ON CONFLICT(chat_id,category_key,dedupe) WHERE status='pending' DO UPDATE SET message=excluded.message,deliver_after=excluded.deliver_after",
       )
-        .bind(c.chat_id, cat, msg, dedupe)
+        .bind(c.chat_id, cat, msg, dedupe, quietEndUtc(c, p))
         .run();
+      accepted = true;
       continue;
     }
     try {
-      await send(e, c.chat_id, msg, {
+      await e.DB.prepare(
+        "INSERT INTO notification_log(dedupe,chat_id,category_key,message) VALUES(?,?,?,?) ON CONFLICT(dedupe,chat_id) DO UPDATE SET category_key=excluded.category_key,message=excluded.message,sent_at=CURRENT_TIMESTAMP",
+      ).bind(dedupe, c.chat_id, cat, msg).run();
+      const log = await e.DB.prepare("SELECT id FROM notification_log WHERE dedupe=? AND chat_id=?").bind(dedupe,c.chat_id).first();
+      await send(e, c.chat_id, msg, replyMarkup || {
         inline_keyboard: [
           [
-            { text: "👍", callback_data: `fb:${key}:1` },
-            { text: "👎", callback_data: `fb:${key}:-1` },
+            { text: "👍", callback_data: `fb:${log?.id}:1` },
+            { text: "👎", callback_data: `fb:${log?.id}:-1` },
           ],
         ],
       });
-      await e.DB.prepare(
-        "INSERT INTO notification_log(dedupe,chat_id,category_key,message) VALUES(?,?,?,?) ON CONFLICT(dedupe,chat_id) DO UPDATE SET category_key=excluded.category_key,message=excluded.message,sent_at=CURRENT_TIMESTAMP",
-      )
-        .bind(dedupe, c.chat_id, cat, msg)
-        .run();
+      accepted = true;
     } catch (err) {
+      await e.DB.prepare("DELETE FROM notification_log WHERE dedupe=? AND chat_id=?").bind(dedupe,c.chat_id).run();
       console.error("PUSH", cat, err?.message || err);
     }
   }
+  return accepted;
 }
 export async function stateEvent(
   e,
@@ -145,23 +176,35 @@ export async function stateEvent(
   )
     .bind(key, next)
     .run();
-  if (active)
+  if (cat === "device_health" && (active || prev === "active")) {
+    const groupKey=`${cat}:${active?"offline":"recovered"}`,
+      item={message:active?onMessage:offMessage,source_id:stateKey},
+      windowMin=Math.min(60,Math.max(1,n((await e.DB.prepare("SELECT setting_value FROM settings WHERE setting_key='event_group_window_min'").first())?.setting_value,5))),
+      oldGroup=await e.DB.prepare("SELECT id,payload_json,source_ids_json FROM event_buffer WHERE group_key=? AND status='pending'").bind(groupKey).first();
+    if (oldGroup) {
+      const payload=JSON.parse(oldGroup.payload_json||"{}"), ids=JSON.parse(oldGroup.source_ids_json||"[]");
+      if (!ids.includes(stateKey)) { payload.items=[...(payload.items||[]),item]; ids.push(stateKey); }
+      await e.DB.prepare("UPDATE event_buffer SET payload_json=?,source_ids_json=?,last_seen_at=CURRENT_TIMESTAMP WHERE id=?").bind(JSON.stringify({...payload,active}),JSON.stringify(ids),oldGroup.id).run();
+    } else {
+      await e.DB.prepare("INSERT INTO event_buffer(group_key,category_key,payload_json,source_ids_json,flush_after) VALUES(?,?,?,?,datetime('now',?))").bind(groupKey,cat,JSON.stringify({active,items:[item]}),JSON.stringify([stateKey]),`+${windowMin} minutes`).run();
+    }
+  } else if (active)
     await push(
       e,
       cat,
-      `${stateKey}:on:${Date.now()}`,
+      `${stateKey}:on`,
       onMessage,
       critical,
-      cat === "device_health",
+      false,
     );
   else if (prev === "active" && offMessage)
     await push(
       e,
       cat,
-      `${stateKey}:off:${Date.now()}`,
+      `${stateKey}:off`,
       offMessage,
       false,
-      cat === "device_health",
+      false,
     );
   return true;
 }
@@ -181,6 +224,8 @@ export async function maintenance(e, p) {
     e.DB.prepare(
       "DELETE FROM notification_log WHERE sent_at<datetime(\'now\',\'-30 days\')",
     ),
+    e.DB.prepare("UPDATE event_buffer SET status='expired' WHERE status='pending' AND first_seen_at<datetime('now','-1 day')"),
+    e.DB.prepare("DELETE FROM event_buffer WHERE status IN ('sent','cancelled','expired') AND first_seen_at<datetime('now','-30 days')"),
     e.DB.prepare(
       "DELETE FROM alert_actions WHERE created_at<datetime(\'now\',\'-30 days\')",
     ),

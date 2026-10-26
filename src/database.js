@@ -1,4 +1,5 @@
-import { CATS, n, clamp, age, comfort } from "./constants.js";
+import { CATS, n } from "./constants.js";
+import { explainScore } from "./v5/engines.js";
 
 export async function schema(e) {
   await e.DB.batch([
@@ -94,7 +95,7 @@ export async function latest(e) {
       "SELECT * FROM alerts WHERE resolved_at IS NULL ORDER BY id DESC LIMIT 30",
     ).all(),
     e.DB.prepare(
-      "SELECT * FROM recommendations WHERE status='active' ORDER BY score DESC LIMIT 20",
+      "SELECT r.*,l.fingerprint,l.occurrence_count,l.first_seen_at,l.last_seen_at,l.last_notified_at,l.snooze_until FROM recommendations r LEFT JOIN recommendation_lifecycle l ON l.recommendation_key=r.recommendation_key WHERE r.status='active' AND (l.snooze_until IS NULL OR l.snooze_until<=CURRENT_TIMESTAMP) ORDER BY r.score DESC LIMIT 50",
     ).all(),
     e.DB.prepare(
       "SELECT * FROM weather_forecast ORDER BY forecast_date LIMIT 7",
@@ -111,23 +112,7 @@ export async function latest(e) {
 }
 
 export function score(x) {
-  const z = x.zones.filter((a) => !a.is_outdoor && a.temperature != null),
-    c = z.length
-      ? Math.round(
-          z.reduce((s, a) => s + comfort(a.temperature, a.humidity), 0) /
-            z.length,
-        )
-      : 0,
-    o = x.zones.filter(
-      (a) => age(a.created_at) > 15 || age(a.created_at) == null,
-    ).length,
-    h = clamp(
-      100 -
-        o * 15 -
-        x.alerts.filter((a) => a.severity === "critical").length * 20 -
-        x.alerts.length * 3,
-    );
-  return { comfort: c, health: h, overall: clamp(c * 0.65 + h * 0.35) };
+  return explainScore(x);
 }
 
 export async function energy(e, start) {

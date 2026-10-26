@@ -1,6 +1,7 @@
 import { ANALYTICS, n, fmt, age, comfort, kyivDateTime } from "./constants.js";
 import { latest, score, now } from "./database.js";
 import { tg, send } from "./telegram.js";
+import { prioritizeFacts, stableFactsKey } from "./v5/engines.js";
 
 export function kyivDate(offsetDays = 0) {
   const d = new Date(Date.now() + offsetDays * 86400000);
@@ -51,12 +52,14 @@ export function weatherEmoji(c) {
   if (c <= 82) return "🌦";
   return "⛈";
 }
-export async function periodEnergy(e, start) {
+export async function periodEnergy(e, start, end = null) {
   const r = (
     await e.DB.prepare(
-      "SELECT energy_total,tariff_zone,cost_per_kwh,created_at FROM power_logs WHERE created_at>=? ORDER BY id",
+      end
+        ? "SELECT energy_total,tariff_zone,cost_per_kwh,created_at FROM power_logs WHERE created_at>=? AND created_at<? ORDER BY id"
+        : "SELECT energy_total,tariff_zone,cost_per_kwh,created_at FROM power_logs WHERE created_at>=? ORDER BY id",
     )
-      .bind(start)
+      .bind(...(end ? [start, end] : [start]))
       .all()
   ).results;
   let day = 0,
@@ -201,7 +204,9 @@ export async function scoreText(e) {
       }))
       .sort((a, b) => b.v - a.v),
     reasons = [];
-  if (s.comfort >= 90)
+  if (s.comfort == null)
+    reasons.push("ℹ️ Кліматичний компонент: недостатньо даних");
+  else if (s.comfort >= 90)
     reasons.push("✅ Клімат у кімнатах близький до оптимального");
   else reasons.push(`⚠️ Комфорт знижений: середня оцінка ${s.comfort}/100`);
   if (!offline.length) reasons.push("✅ Усі датчики передають свіжі дані");
@@ -210,14 +215,23 @@ export async function scoreText(e) {
   else reasons.push("✅ Критичних алертів немає");
   if (x.alerts.length)
     reasons.push(`ℹ️ Усього активних алертів: ${x.alerts.length}`);
+  if (x.power?.voltage >= 200 && x.power?.voltage <= 250)
+    reasons.push("✅ Напруга в нормальному діапазоні");
   return [
     "📊 HOME SCORE",
     `Загальна оцінка: ${s.overall}/100`,
-    `Клімат: ${s.comfort}/100`,
+    `Клімат: ${s.comfort == null ? "немає достатніх даних" : `${s.comfort}/100`}`,
     `Стан системи: ${s.health}/100`,
+    `Впевненість: ${s.confidence}%`,
     "",
-    "Обґрунтування:",
-    ...reasons,
+    "Що вплинуло на оцінку:",
+    ...(s.deductions.length
+      ? s.deductions.map((d) => `−${fmt(d.points, 0)}: ${d.label}`)
+      : ["✅ Немає зафіксованих списань балів"]),
+    "",
+    "Що добре:",
+    ...reasons.filter((x) => x.startsWith("✅")),
+    ...reasons.filter((x) => !x.startsWith("✅")),
     "",
     roomScores.length
       ? `🏆 Найкраща кімната: ${roomScores[0].name} · ${roomScores[0].v}/100`
@@ -254,6 +268,85 @@ export async function homeSummaryRich(e) {
       ? `💡 ${x.recs[0].title}: ${x.recs[0].message}`
       : "✅ Термінових рекомендацій немає",
   ].join("\n");
+}
+
+export async function sleepText(e) {
+  const row = await e.DB.prepare("SELECT * FROM house_sleep_scores ORDER BY sleep_date DESC LIMIT 1").first();
+  if (!row) return "🌙 НІЧНИЙ ПІДСУМОК\nОцінку ще не розраховано: потрібні нічні дані після 07:00.";
+  let c={}, reasons=[];
+  try { c=JSON.parse(row.components_json||"{}"); reasons=JSON.parse(row.reasons_json||"[]"); } catch {}
+  const component = (key,label,max) => c.components?.find(x=>x.key===key)?.available
+    ? `${label}: ${fmt(c.components.find(x=>x.key===key).score,0)}/${max}`
+    : `${label}: недостатньо даних`;
+  return [
+    "🌙 НІЧНИЙ ПІДСУМОК",
+    `Sleep Score дому: ${row.score ?? "—"}/100 · даних ${row.confidence}%`,
+    component("climate","🌡 Клімат",40),
+    component("reliability","📡 Система",25),
+    c.night_energy_available ? `⚡ Нічна енергія: ${fmt(c.night_energy_kwh,2)} кВт·год` : "⚡ Нічна енергія: немає базового порівняння",
+    component("events","🚨 Події",15),
+    reasons.length ? `\nГоловне: ${reasons[0]}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+async function caretakerFacts(e) {
+  const x=await latest(e), s=score(x), en=await energyOverview(e), facts=[];
+  const add=(f)=>facts.push({...f,numeric_evidence:f.numeric_evidence??[...String(`${f.title} ${f.body}`).matchAll(/-?\d+(?:[.,]\d+)?/g)].map(m=>m[0])});
+  for(const a of x.alerts.filter(a=>["critical","warning"].includes(a.severity)))
+    add({id:`alert:${a.id}`,source_type:"alert",source_id:String(a.id),severity:a.severity,timestamp:a.created_at,numeric_evidence:{value:a.alert_value,threshold:a.alert_threshold},title:a.alert_message,body:a.alert_message,suggested_action:"Перевірити активну подію."});
+  for(const r of x.recs)
+    add({id:`recommendation:${r.recommendation_key||r.id}`,source_type:"recommendation",source_id:String(r.recommendation_key||r.id),severity:r.priority==="critical"?"critical":r.priority==="high"?"high":r.priority==="medium"?"medium":"info",timestamp:r.last_seen_at||r.created_at,numeric_evidence:{value:r.recommendation_key==="bill"?r.metadata_json:null},title:r.title,body:r.message,suggested_action:r.action||""});
+  for(const d of s.deductions)
+    add({id:`score:${d.code}`,source_type:"home_score",source_id:d.code,severity:"warning",timestamp:new Date().toISOString(),numeric_evidence:d.evidence,title:d.label,body:`Home Score ${s.overall}/100. ${d.label}.`,suggested_action:"Переглянути показники дому."});
+  const sleep=await e.DB.prepare("SELECT * FROM house_sleep_scores ORDER BY sleep_date DESC LIMIT 1").first();
+  if(sleep&&sleep.score!=null)
+    add({id:`sleep:${sleep.sleep_date}`,source_type:"sleep_score",source_id:sleep.sleep_date,severity:"info",timestamp:sleep.created_at,numeric_evidence:{score:sleep.score,confidence:sleep.confidence},title:`Нічний Sleep Score ${sleep.score}/100`,body:`Даних ${sleep.confidence}%. ${JSON.parse(sleep.reasons_json||"[]")[0]||""}`,suggested_action:"Переглянути нічний підсумок."});
+  const daily=x.daily[0];
+  if(daily&&(n(daily.precipitation_probability)>=70||[45,48,65,75,82,86,95,96,99].includes(n(daily.weather_code))))
+    add({id:`weather:${daily.forecast_date}`,source_type:"weather",source_id:String(daily.forecast_date),severity:"high",timestamp:daily.forecast_date,numeric_evidence:{precipitation_probability:n(daily.precipitation_probability),weather_code:n(daily.weather_code)},title:"Погодні умови потребують уваги",body:`Опади ${fmt(daily.precipitation_probability,0)}% · ${String(daily.forecast_date).slice(0,10)}.`,suggested_action:"Перевірити прогноз перед виходом."});
+  if(en.month.samples>1)
+    add({id:`energy:${now().date}`,source_type:"energy",source_id:now().date,severity:"info",timestamp:new Date().toISOString(),numeric_evidence:{month_kwh:en.month.total,month_cost:en.month.cost,forecast_cost:en.forecastCost},title:"Енергія та прогноз рахунку",body:`Місяць: ${fmt(en.month.total,1)} кВт·год · ${fmt(en.month.cost,0)} грн. Прогноз: ${fmt(en.forecastCost,0)} грн.`,suggested_action:"Переглянути споживання день/ніч."});
+  const unique=new Map(); for(const f of facts) if(!unique.has(f.id)) unique.set(f.id,f);
+  return prioritizeFacts([...unique.values()],30);
+}
+
+export async function caretakerReport(e) {
+  const facts=await caretakerFacts(e), picked=prioritizeFacts(facts,5), ids=new Set(picked.map(f=>f.id));
+  let ordered=picked, fallbackUsed=true;
+  if(picked.length&&e.AI) try {
+    const prompt=JSON.stringify(picked.map(({id,source_type,severity,title,body,suggested_action})=>({id,source_type,severity,title,body,suggested_action})));
+    const res=await e.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast",{messages:[{role:"system",content:"You may only reorder and deduplicate the supplied fact IDs. Return JSON {ids:[...]}, with at most five IDs. Add no facts, text, numbers or IDs."},{role:"user",content:prompt}],temperature:0,max_tokens:300});
+    const parsed=JSON.parse(String(res.response||"").slice(String(res.response||"").indexOf("{"),String(res.response||"").lastIndexOf("}")+1));
+    const order=[...new Set((parsed.ids||[]).filter(id=>ids.has(id)))], map=new Map(picked.map(f=>[f.id,f]));
+    if(order.length){ordered=order.map(id=>map.get(id));fallbackUsed=false;}
+  } catch {}
+  const critical=ordered.filter(f=>f.severity==="critical"), today=ordered.filter(f=>["high","warning","medium"].includes(f.severity)),
+    other=ordered.filter(f=>!critical.includes(f)&&!today.includes(f)), savings=other.filter(f=>f.source_type==="energy"||f.source_id==="bill"),
+    recommended=other.filter(f=>!savings.includes(f)), lines=["🧠 AI CARETAKER"];
+  const section=(title,items)=>{if(items.length){lines.push("",title);for(const f of items)lines.push(`• ${f.title}${f.body&&f.body!==f.title?`: ${f.body}`:""}${f.suggested_action?`\n  Дія: ${f.suggested_action}`:""}`);}};
+  section("🔴 Критично",critical); section("🟠 Сьогодні",today); section("🟢 Рекомендовано",recommended); section("💰 Економія",savings);
+  if(!ordered.length) lines.push("\n✅ Немає активних проблем, що потребують дії.");
+  const text=lines.join("\n").slice(0,3900), dedupeKey=stableFactsKey(ordered), sourceIds=ordered.map(f=>f.source_id);
+  await e.DB.prepare("INSERT OR IGNORE INTO caretaker_runs(dedupe_key,facts_json,output_text,fallback_used,output_length) VALUES(?,?,?,?,?)").bind(dedupeKey,JSON.stringify(ordered),text,fallbackUsed?1:0,text.length).run();
+  const first=ordered.find(f=>f.source_type==="recommendation"&&f.source_id), rid=first?await e.DB.prepare("SELECT id FROM recommendations WHERE recommendation_key=? AND status='active' ORDER BY id DESC LIMIT 1").bind(first.source_id).first():null;
+  return {text,facts:ordered,dedupeKey,sourceIds,fallbackUsed,keyboard:{inline_keyboard:[...(rid?[[{text:"✅ Виконано",callback_data:`recdone:${rid.id}`},{text:"🔕 Нагадати",callback_data:`recsnooze:${rid.id}:60` }]]:[]),[{text:"📋 Усі поради",callback_data:"recs:active"}]]}};
+}
+
+export async function smartMorningDigest(e) {
+  const digestLimit=Math.min(5,Math.max(1,n((await e.DB.prepare("SELECT setting_value FROM settings WHERE setting_key='smart_digest_max_items'").first())?.setting_value,3))),
+    x=await latest(e), s=score(x), en=await energyOverview(e), facts=prioritizeFacts((await caretakerFacts(e)).filter(f=>f.source_type!=="home_score"),digestLimit),
+    today=x.daily[0], sleep=await e.DB.prepare("SELECT * FROM house_sleep_scores ORDER BY sleep_date DESC LIMIT 1").first(),
+    yesterday=kyivDate(-1), yEnergy=await periodEnergy(e,`${yesterday} 00:00:00`,`${kyivDate()} 00:00:00`),
+    issueCount=x.recs.filter(r=>r.category!=="cost").length+x.alerts.filter(a=>a.severity==="critical").length,
+    lines=[issueCount?`⚠️ Потрібна увага до ${issueCount} речей`:"✅ Усе добре","\n🔎 Головне"];
+  for(const f of facts)lines.push(`• ${f.title}${f.body&&f.body!==f.title?`: ${f.body}`:""}`);
+  lines.push(`\n📊 Home Score: ${s.overall}/100 · впевненість ${s.confidence}%`);
+  if(s.deductions.length)lines.push(`Причини: ${s.deductions.slice(0,2).map(d=>d.label).join("; ")}`);
+  if(sleep)lines.push(`\n🌙 Sleep Score: ${sleep.score??"—"}/100 · даних ${sleep.confidence}%`);
+  lines.push(`\n🌦 Погода: ${today?`${fmt(today.temp_min)}…${fmt(today.temp_max)} °C · опади ${fmt(today.precipitation_probability,0)}%`:"даних немає"}`);
+  lines.push(`⚡ Вчора: ${fmt(yEnergy.total,2)} кВт·год · місяць: ${fmt(en.month.total,1)} кВт·год / ${fmt(en.month.cost,0)} грн`);
+  const bill=x.recs.find(r=>r.recommendation_key==="bill"); if(bill)lines.push(`💰 ${bill.message.split("\n")[0]}`);
+  return {text:lines.join("\n").slice(0,1500),keyboard:{inline_keyboard:[[{text:"📋 Деталі",callback_data:"a:home"},{text:"🧠 Caretaker",callback_data:"m:caretaker"}],[{text:"🌙 Ніч",callback_data:"a:night"},{text:"⚡ Енергія",callback_data:"a:energy"},{text:"🚨 Події",callback_data:"m:events"}]]}};
 }
 export async function analyticsText(e, days) {
   const start = `${kyivDate(-(days - 1))} 00:00:00`,
