@@ -113,7 +113,7 @@ export async function push(
         ],
       });
       await e.DB.prepare(
-        "INSERT OR IGNORE INTO notification_log(dedupe,chat_id,category_key,message) VALUES(?,?,?,?)",
+        "INSERT INTO notification_log(dedupe,chat_id,category_key,message) VALUES(?,?,?,?) ON CONFLICT(dedupe,chat_id) DO UPDATE SET category_key=excluded.category_key,message=excluded.message,sent_at=CURRENT_TIMESTAMP",
       )
         .bind(dedupe, c.chat_id, cat, msg)
         .run();
