@@ -77,12 +77,24 @@ export async function push(
         cat === "recommendations"
           ? Math.max(720, configuredCooldown)
           : configuredCooldown,
+      keyCooldown =
+        cat === "recommendations" && key === "bill"
+          ? Math.max(1440, cooldown)
+          : cooldown,
       recent = await e.DB.prepare(
       "SELECT 1 ok FROM notification_log WHERE chat_id=? AND category_key=? AND sent_at>=datetime(\'now\',?) LIMIT 1",
     )
       .bind(c.chat_id, cat, `-${cooldown} minutes`)
       .first();
-    if (recent && !critical && !bypassCooldown) continue;
+    const recentKey =
+      cat === "recommendations" && key === "bill"
+        ? await e.DB.prepare(
+            "SELECT 1 ok FROM notification_log WHERE chat_id=? AND dedupe=? AND sent_at>=datetime('now',?) LIMIT 1",
+          )
+            .bind(c.chat_id, dedupe, `-${keyCooldown} minutes`)
+            .first()
+        : null;
+    if ((recent || recentKey) && !critical && !bypassCooldown) continue;
     if (!critical && quiet(c, p)) {
       await e.DB.prepare(
         "INSERT OR IGNORE INTO notification_queue(chat_id,category_key,message,dedupe,status,deliver_after) VALUES(?,?,?,?,\'pending\',datetime(\'now\',\'+8 hours\'))",
