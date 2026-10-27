@@ -167,19 +167,19 @@ export async function weatherTextRich(e) {
     .trim();
 }
 export async function weatherForecast48hText(e) {
-  const from = kyivDateTime(), to = kyivDateTime(48 * 60);
+  const from = kyivDateTime(), to = kyivDateTime(27 * 60);
   const rows = (
     await e.DB.prepare(
       "SELECT * FROM weather_hourly WHERE forecast_time>=? AND forecast_time<=? ORDER BY forecast_time ASC",
     ).bind(from, to).all()
   ).results;
-  if (!rows.length) return "🌦 ПРОГНОЗ ПОГОДИ НА 48 ГОДИН\nНемає актуальних погодинних даних.";
+  if (!rows.length) return "🌦 ПРОГНОЗ ПОГОДИ НА 24 ГОДИНИ\nНемає актуальних погодинних даних.";
   const groups = {};
   for (const h of rows) {
     const date = String(h.forecast_time || "").slice(0, 10);
     (groups[date] ??= []).push(h);
   }
-  const lines = ["🌦 ПРОГНОЗ ПОГОДИ НА НАСТУПНІ 48 ГОДИН", "Крок прогнозу — 3 години."];
+  const lines = ["🌦 ПРОГНОЗ ПОГОДИ НА НАСТУПНІ 24 ГОДИНИ", "Крок прогнозу — 3 години."];
   for (const [date, items] of Object.entries(groups)) {
     lines.push("", `📅 ${forecastDayLabel(date)}`);
     for (const h of items)
