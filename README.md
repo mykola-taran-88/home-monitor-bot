@@ -76,3 +76,5 @@ Rollback: deploy the previous API and bot Worker versions from Cloudflare. The m
 - Notification quiet-hours queue items are due at the channel's configured quiet end. Event and scheduled-job outcomes can be inspected in Telegram → Diagnostics.
 - Recommendation lifecycle, Sleep Score, and caretaker reports require the shared D1 migration. The Home Score and Sleep Score remain on-demand/menu or digest content, not independent push categories.
 - Configure the v5 defaults in the API admin settings page. Current defaults are in the migration SQL; no new Worker secrets are introduced.
+
+<!-- trigger v5 deploy -->
