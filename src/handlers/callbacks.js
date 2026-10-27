@@ -102,23 +102,42 @@ export async function callback(e, q) {
     });
   }
   if (d.startsWith("schedtime:")) {
-    const [, cat, time] = d.split(":");
-    await e.DB.prepare(
-      "UPDATE notification_settings SET schedule_time=?,enabled=1 WHERE category_key=?",
-    )
-      .bind(time, cat)
-      .run();
-    return send(e, id, `✅ ${CATS[cat]?.[1] || cat}: ${time}`);
+  const payload = d.slice("schedtime:".length);
+  const separator = payload.indexOf(":");
+  const cat = payload.slice(0, separator);
+  const time = payload.slice(separator + 1);
+
+  if (!/^\d{2}:\d{2}$/.test(time)) {
+    return send(e, id, "⚠️ Некоректний формат часу.");
   }
+
+  await e.DB.prepare(`
+    UPDATE notification_settings
+    SET schedule_time = ?, enabled = 1
+    WHERE category_key = ?
+  `)
+    .bind(time, cat)
+    .run();
+
+  return send(e, id, `✅ ${CATS[cat]?.[1] || cat}: ${time}`);
+}
   if (d.startsWith("quietset:")) {
-    const [, start, end] = d.split(":");
-    await e.DB.prepare(
-      "UPDATE notification_channels SET quiet_enabled=1,quiet_start=?,quiet_end=? WHERE enabled=1",
-    )
-      .bind(start, end)
-      .run();
-    return send(e, id, `✅ Тихі години ${start}-${end}`);
-  }
+  const parts = d.split(":");
+  const start = `${parts[1]}:${parts[2]}`;
+  const end = `${parts[3]}:${parts[4]}`;
+
+  await e.DB.prepare(`
+    UPDATE notification_channels
+    SET quiet_enabled = 1,
+        quiet_start = ?,
+        quiet_end = ?
+    WHERE enabled = 1
+  `)
+    .bind(start, end)
+    .run();
+
+  return send(e, id, `✅ Тихі години ${start}-${end}`);
+}
   if (d === "m:main")
     return edit(e, id, mid, "🏠 HOME MONITOR\nОберіть розділ:", MAIN);
   if (d === "m:home") return edit(e, id, mid, "🏠 Стан дому", HOME);
