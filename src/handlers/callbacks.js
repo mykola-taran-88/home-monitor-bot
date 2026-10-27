@@ -6,7 +6,11 @@ import { cats, channels, channelDetails, channelCats, diag, help, live, recommen
 import { tg, send, edit } from "../telegram.js";
 
 export async function callback(e, q) {
-  await tg(e, "answerCallbackQuery", { callback_query_id: q.id });
+  const feedbackCallback = q.data.startsWith("fb:") || q.data.startsWith("recbad:");
+  await tg(e, "answerCallbackQuery", {
+    callback_query_id: q.id,
+    ...(feedbackCallback ? { text: "Відгук враховано." } : {}),
+  });
   const id = String(q.message.chat.id),
     mid = q.message.message_id,
     d = q.data;
@@ -14,7 +18,7 @@ export async function callback(e, q) {
     const [, logId, rating] = d.split(":"),
       row=await e.DB.prepare("SELECT dedupe FROM notification_log WHERE id=? AND chat_id=?").bind(n(logId),id).first();
     if(row) await e.DB.prepare("INSERT INTO notification_feedback(chat_id,dedupe,rating) VALUES(?,?,?)").bind(id,row.dedupe,n(rating)).run();
-    return send(e, id, "Дякую, відгук збережено.");
+    return;
   }
   if (d.startsWith("recs:")) {
     const view = await recommendationCenter(e, d.slice(5));
@@ -46,7 +50,7 @@ export async function callback(e, q) {
   if (d.startsWith("recbad:")) {
     const rid=n(d.slice(7)), row=await e.DB.prepare("SELECT recommendation_key FROM recommendations WHERE id=?").bind(rid).first();
     if (row) await e.DB.prepare("INSERT INTO recommendation_feedback(recommendation_key,chat_id,action) VALUES(?,?,'not_useful')").bind(row.recommendation_key,id).run();
-    return send(e,id,"👎 Відгук збережено. Дякую.");
+    return;
   }
   if (d.startsWith("recdetail:")) {
     const row=await e.DB.prepare("SELECT r.*,l.metadata_json,l.fingerprint,l.first_seen_at,l.last_seen_at FROM recommendations r LEFT JOIN recommendation_lifecycle l ON l.recommendation_key=r.recommendation_key WHERE r.id=?").bind(n(d.slice(10))).first();
