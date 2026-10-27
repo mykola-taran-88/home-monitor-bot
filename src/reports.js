@@ -184,7 +184,7 @@ export async function weatherForecast48hText(e) {
     lines.push("", `📅 ${forecastDayLabel(date)}`);
     for (const h of items)
       lines.push(
-        `${String(h.forecast_time).slice(11, 16)} ${weatherEmoji(h.weather_code)} ${weatherName(h.weather_code)} · ${fmt(h.temperature)} °C · опади ${fmt(h.precipitation_probability, 0)}% · вітер ${fmt(h.wind_speed, 0)} км/год`,
+        `${String(h.forecast_time).slice(11, 16)} ${weatherEmoji(h.weather_code)} ${fmt(h.temperature)} °C · дощ ${fmt(h.precipitation_probability, 0)}%`,
       );
   }
   return lines.join("\n");
