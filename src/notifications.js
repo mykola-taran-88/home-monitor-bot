@@ -82,7 +82,10 @@ export async function push(
     .bind(cat)
     .first();
   if (!s?.enabled) return;
-  const p = now(),
+  const billRecommendation =
+      cat === "recommendations" &&
+      (key === "bill" || key.startsWith("bill:v")),
+    p = now(),
     dedupe = `${cat}:${key}`,
     cs = (
       await e.DB.prepare(
@@ -106,7 +109,7 @@ export async function push(
           ? Math.max(720, configuredCooldown)
           : configuredCooldown,
       keyCooldown =
-        cat === "recommendations" && key === "bill"
+        billRecommendation
           ? Math.max(1440, cooldown)
           : cooldown,
       recent = await e.DB.prepare(
@@ -115,19 +118,26 @@ export async function push(
       .bind(c.chat_id, cat, `-${cooldown} minutes`)
       .first();
     const recentKey =
-      cat === "recommendations" && key === "bill"
+      billRecommendation
         ? await e.DB.prepare(
-            "SELECT 1 ok FROM notification_log WHERE chat_id=? AND dedupe=? AND sent_at>=datetime('now',?) LIMIT 1",
+            "SELECT 1 ok FROM notification_log WHERE chat_id=? AND dedupe LIKE ? AND sent_at>=datetime('now',?) LIMIT 1",
           )
-            .bind(c.chat_id, dedupe, `-${keyCooldown} minutes`)
+            .bind(c.chat_id, `${cat}:bill%`, `-${keyCooldown} minutes`)
             .first()
         : null;
-    if ((recent || recentKey) && !critical && !bypassCooldown) continue;
+    if (
+      (recent || recentKey) &&
+      !critical &&
+      (!bypassCooldown || billRecommendation)
+    ) continue;
     if (!critical && quiet(c, p)) {
+      const queueDedupe = billRecommendation
+        ? `${cat}:bill:quiet-latest`
+        : dedupe;
       await e.DB.prepare(
         "INSERT INTO notification_queue(chat_id,category_key,message,dedupe,status,deliver_after) VALUES(?,?,?,?,'pending',?) ON CONFLICT(chat_id,category_key,dedupe) WHERE status='pending' DO UPDATE SET message=excluded.message,deliver_after=excluded.deliver_after",
       )
-        .bind(c.chat_id, cat, msg, dedupe, quietEndUtc(c, p))
+        .bind(c.chat_id, cat, msg, queueDedupe, quietEndUtc(c, p))
         .run();
       accepted = true;
       continue;
