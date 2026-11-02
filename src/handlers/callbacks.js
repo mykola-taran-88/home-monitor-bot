@@ -174,17 +174,34 @@ export async function callback(e, q) {
     const k = d.slice(2);
     if (k === "home") return send(e, id, await homeSummaryRich(e), HOME);
     if (k === "climate") {
-      const x = await latest(e);
-      return send(
-        e,
-        id,
-        ["🌡 КІМНАТНИЙ КОМФОРТ", ...x.zones.map((a) => {
-          const minutes = age(a.created_at), fresh = minutes != null && minutes <= 15,
-            comfortScore = !a.is_outdoor && a.temperature != null && a.humidity != null ? comfort(a.temperature, a.humidity) : null;
-          return `${a.is_outdoor ? "🌳 Надворі" : "🏠"} ${a.device_name || a.device_id}: ${fmt(a.temperature)}°C · ${fmt(a.humidity, 0)}%${comfortScore == null ? "" : ` · комфорт ${comfortScore}/100`} · ${fresh ? `дані ${minutes} хв тому` : `НЕСВІЖІ ДАНІ${minutes == null ? "" : ` · ${minutes} хв`}`}`;
-        })].join("\n"),
-        HOME,
-      );
+      const x = await latest(e),
+        ago = (minutes) => {
+          if (minutes == null) return "час виміру невідомий";
+          if (minutes < 60) return `${minutes} хв тому`;
+          const hours = Math.floor(minutes / 60), rest = minutes % 60;
+          if (hours < 24) return rest ? `${hours} год ${rest} хв тому` : `${hours} год тому`;
+          const days = Math.floor(hours / 24), remainingHours = hours % 24;
+          return remainingHours ? `${days} дн ${remainingHours} год тому` : `${days} дн тому`;
+        },
+        lines = ["🌡 КЛІМАТ У БУДИНКУ", "Температура · вологість · комфорт", "────────────────────"];
+      if (!x.zones.length) lines.push("Немає підключених кліматичних датчиків.");
+      for (const a of x.zones) {
+        const minutes = age(a.created_at), fresh = minutes != null && minutes <= 15,
+          hasReading = a.temperature != null || a.humidity != null,
+          icon = a.is_outdoor ? "🌳" : "🏠",
+          comfortScore = !a.is_outdoor && a.temperature != null && a.humidity != null ? comfort(a.temperature, a.humidity) : null,
+          comfortIcon = comfortScore == null ? "🌡" : comfortScore >= 80 ? "🟢" : comfortScore >= 65 ? "🟡" : "🔴",
+          status = !hasReading ? "❌ Немає вимірювань" : fresh ? `✅ Актуально · ${ago(minutes)}` : `⚠️ Дані застаріли · ${ago(minutes)}`;
+        lines.push(
+          `${icon} ${a.device_name || a.device_id}`,
+          `🌡 Температура: ${fmt(a.temperature)} °C`,
+          `💧 Вологість: ${fmt(a.humidity, 0)}%`,
+          ...(comfortScore == null ? [] : [`${comfortIcon} Комфорт: ${comfortScore}/100`]),
+          `📡 ${status}`,
+          "",
+        );
+      }
+      return edit(e, id, mid, lines.join("\n").trim(), HOME);
     }
     if (k === "energy") return send(e, id, await energyText(e), HOME);
     if (k === "weather") return send(e, id, await weatherTextRich(e), HOME);
