@@ -74,6 +74,19 @@ export const comfort = (t, h) =>
       Math.abs(n(h) - 50) * 1.2 -
       (h > 70 || h < 25 ? 10 : 0),
   );
+export const roomIcon = (name, isOutdoor = false) => {
+  if (isOutdoor) return "🌳";
+  const room = String(name || "").toLowerCase();
+  if (/kid|child|nursery|дитяч/.test(room)) return "🧸";
+  if (/bed|спальн/.test(room)) return "🛏️";
+  if (/hall|corridor|коридор|передпокій|передпоко/.test(room)) return "🚪";
+  if (/living|lounge|вітальн/.test(room)) return "🛋️";
+  if (/kitchen|кухн/.test(room)) return "🍳";
+  if (/bath|ванн|санвуз/.test(room)) return "🛁";
+  if (/office|study|кабінет|робоч/.test(room)) return "🖥️";
+  if (/garage|гараж/.test(room)) return "🚗";
+  return "🏠";
+};
 
 export const MAIN = {
   inline_keyboard: [

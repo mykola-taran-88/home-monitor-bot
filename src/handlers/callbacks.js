@@ -1,4 +1,4 @@
-import { CATS, n, fmt, age, comfort, MAIN, HOME, ANALYTICS, EVENTS, NOTIFY, SETTINGS, HELP } from "../constants.js";
+import { CATS, n, fmt, age, comfort, roomIcon, MAIN, HOME, ANALYTICS, EVENTS, NOTIFY, SETTINGS, HELP } from "../constants.js";
 import { latest } from "../database.js";
 import { ask } from "../ai.js";
 import { homeSummaryRich, energyText, weatherTextRich, scoreText, chart, sleepText, caretakerReport } from "../reports.js";
@@ -188,7 +188,7 @@ export async function callback(e, q) {
       for (const a of x.zones) {
         const minutes = age(a.created_at), fresh = minutes != null && minutes <= 15,
           hasReading = a.temperature != null || a.humidity != null,
-          icon = a.is_outdoor ? "🌳" : "🏠",
+          icon = roomIcon(a.device_name || a.device_id, a.is_outdoor),
           comfortScore = !a.is_outdoor && a.temperature != null && a.humidity != null ? comfort(a.temperature, a.humidity) : null,
           comfortIcon = comfortScore == null ? "🌡" : comfortScore >= 80 ? "🟢" : comfortScore >= 65 ? "🟡" : "🔴",
           status = !hasReading ? "❌ Немає вимірювань" : fresh ? `✅ Актуально · ${ago(minutes)}` : `⚠️ Дані застаріли · ${ago(minutes)}`;

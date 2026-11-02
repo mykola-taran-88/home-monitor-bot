@@ -1,4 +1,4 @@
-import { ANALYTICS, n, fmt, age, comfort, kyivDateTime } from "./constants.js";
+import { ANALYTICS, n, fmt, age, comfort, roomIcon, kyivDateTime } from "./constants.js";
 import { latest, score, now } from "./database.js";
 import { tg, send } from "./telegram.js";
 import { prioritizeFacts, stableFactsKey } from "./v5/engines.js";
@@ -315,7 +315,7 @@ export async function homeSummaryRich(e) {
   const roomLines = z.slice(0, 4).map((room) => {
     const minutes = age(room.created_at), fresh = minutes != null && minutes <= 15,
       roomComfort = room.humidity == null ? null : comfort(room.temperature, room.humidity);
-    return `${roomComfort != null && roomComfort < 65 ? "🟠" : "🌡"} ${room.device_name || room.device_id}: ${fmt(room.temperature)}°C · ${fmt(room.humidity, 0)}% · комфорт ${roomComfort == null ? "—" : `${roomComfort}/100`} · ${fresh ? `дані ${minutes} хв тому` : `несвіжі дані${minutes == null ? "" : ` · ${minutes} хв`}`}`;
+    return `${roomIcon(room.device_name || room.device_id, room.is_outdoor)} ${room.device_name || room.device_id}: ${fmt(room.temperature)}°C · ${fmt(room.humidity, 0)}% · ${roomComfort != null && roomComfort < 65 ? "🔴" : roomComfort != null && roomComfort < 80 ? "🟡" : "🟢"} комфорт ${roomComfort == null ? "—" : `${roomComfort}/100`} · ${fresh ? `дані ${minutes} хв тому` : `несвіжі дані${minutes == null ? "" : ` · ${minutes} хв`}`}`;
   });
   const coverage = climateCoverage(x.zones);
   return [
