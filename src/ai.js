@@ -45,6 +45,80 @@ function asksLatestOutdoorReading(question) {
     /(?:показник\w*|вимір\w*|дан\w*|датчик\w*|оновл\w*|температур\w*)/i.test(question);
 }
 
+function asksCurrentTariff(question) {
+  return /тариф/i.test(question) &&
+    /(?:зараз|тепер|поточн\w*|сьогодн\w*)/i.test(question);
+}
+
+function asksRecentEnergy(question) {
+  return /(?:скільки|обсяг|кількість|витрат\w*|спожит\w*|споживан\w*)/i.test(question) &&
+    /(?:електрик\w*|енерг\w*|кВт)/i.test(question) &&
+    /(?:останні?\s*2\s*(?:год|h)|дві\s*годин|2\s*годин)/i.test(question);
+}
+
+async function currentTariffAnswer(e, id, question) {
+  const settings = (
+      await e.DB.prepare(
+        "SELECT setting_key,setting_value FROM settings WHERE setting_key IN ('timezone','day_tariff','night_tariff','day_start','night_start')",
+      ).all()
+    ).results,
+    values = Object.fromEntries(settings.map((row) => [row.setting_key, row.setting_value])),
+    timezone = values.timezone || "Europe/Kyiv",
+    time = new Intl.DateTimeFormat("en-GB", {
+      timeZone: timezone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).format(new Date()),
+    dayStart = values.day_start || "07:00",
+    nightStart = values.night_start || "23:00",
+    night = nightStart < dayStart
+      ? time >= nightStart && time < dayStart
+      : time >= nightStart || time < dayStart,
+    zone = night ? "нічний" : "денний",
+    rate = night ? values.night_tariff : values.day_tariff,
+    price = rate == null || rate === "" ? "ставку не налаштовано" : `${fmt(rate, 2)} грн/кВт·год`,
+    answer = `Зараз діє ${zone} тариф: ${price}. Період: ${night ? `${nightStart}–${dayStart}` : `${dayStart}–${nightStart}`} (${timezone}).`;
+  return saveTurn(e, id, question, answer);
+}
+
+async function recentEnergyAnswer(e, id, question) {
+  const [baseline, recent] = await Promise.all([
+      e.DB.prepare(
+        "SELECT energy_total,created_at FROM power_logs WHERE created_at>=datetime('now','-135 minutes') AND created_at<datetime('now','-2 hours') ORDER BY created_at DESC,id DESC LIMIT 1",
+      ).first(),
+      e.DB.prepare(
+        "SELECT energy_total,created_at FROM power_logs WHERE created_at>=datetime('now','-2 hours') ORDER BY created_at,id LIMIT 500",
+      ).all(),
+    ]),
+    rows = [...(baseline ? [baseline] : []), ...(recent.results || [])];
+  let consumed = 0, validIntervals = 0;
+  for (let i = 1; i < rows.length; i++) {
+    const delta = rows[i].energy_total == null || rows[i - 1].energy_total == null
+      ? NaN
+      : Number(rows[i].energy_total) - Number(rows[i - 1].energy_total);
+    if (Number.isFinite(delta) && delta >= 0 && delta <= 100) {
+      consumed += delta;
+      validIntervals++;
+    }
+  }
+  let answer;
+  if (!recent.results?.length) {
+    answer = "За останні 2 години база не містить показників лічильника електроенергії.";
+  } else if (!baseline || validIntervals === 0) {
+    answer = "Не можу точно обчислити споживання за останні 2 години: у базі недостатньо послідовних показників лічильника.";
+  } else {
+    const first = formatKyivTimestamp(rows[0].created_at),
+      last = formatKyivTimestamp(rows.at(-1).created_at),
+      latestAge = age(rows.at(-1).created_at),
+      stale = latestAge != null && latestAge > 20
+        ? ` Останній показник отримано ${latestAge} хв тому, тому підрахунок охоплює лише наявні записи.`
+        : "";
+    answer = `За останні 2 години спожито приблизно ${fmt(consumed, 3)} кВт·год. Дані лічильника: ${first} — ${last}.${stale}`;
+  }
+  return saveTurn(e, id, question, answer);
+}
+
 function formatKyivTimestamp(value) {
   const raw = String(value || "").replace(" ", "T"),
     iso = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw) ? raw : `${raw}Z`,
@@ -104,6 +178,8 @@ async function validateDatabaseAnswer(e, question, evidence, answer) {
 
 export async function ask(e, id, q) {
   if (asksLatestOutdoorReading(q)) return latestOutdoorAnswer(e, id, q);
+  if (asksCurrentTariff(q)) return currentTariffAnswer(e, id, q);
+  if (asksRecentEnergy(q)) return recentEnergyAnswer(e, id, q);
   const planner = await runAI(
     e,
     [
