@@ -117,7 +117,7 @@ export const HOME = {
     ],
     [
       { text: "🌦 Погода", callback_data: "a:weather" },
-      { text: "📊 Score", callback_data: "a:score" },
+      { text: "📊 Оцінка дому", callback_data: "a:score" },
     ],
     [
       { text: "💡 Рекомендації", callback_data: "a:recs" },
@@ -151,7 +151,7 @@ export const EVENTS = {
       { text: "✅ Вирішені", callback_data: "inbox:resolved" },
     ],
     [
-      { text: "📜 Timeline", callback_data: "timeline" },
+      { text: "📜 Історія", callback_data: "timeline" },
       { text: "📡 Датчики", callback_data: "a:climate" },
     ],
     [{ text: "⬅️ Меню", callback_data: "m:main" }],
@@ -185,7 +185,7 @@ export const SETTINGS = {
       { text: "💡 Пороги", callback_data: "thresholds" },
     ],
     [
-      { text: "📌 Live Card", callback_data: "live" },
+      { text: "📌 Картка стану", callback_data: "live" },
       { text: "📤 Експорт", callback_data: "export" },
     ],
     [{ text: "⬅️ Меню", callback_data: "m:main" }],

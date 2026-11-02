@@ -10,16 +10,16 @@ export function help(k) {
   return (
     {
       start:
-        "🚀 ШВИДКИЙ СТАРТ\nНатискайте кнопки. Для AI просто пишіть питання. Канали додаються через Сповіщення → Канали.",
+        "🚀 Швидкий старт\nОберіть потрібний розділ кнопкою нижче. Щоб поставити запитання помічнику, надішліть його звичайним повідомленням. Канал для сповіщень можна додати в меню «Сповіщення» → «Канали».",
       features:
-        "🏠 МОЖЛИВОСТІ\nСтан дому з кімнатним комфортом і свіжістю датчиків, AI Caretaker із перевіреними фактами, Smart Morning Digest, історія подій дому, рекомендації з урахуванням повторного відгуку, нічний Sleep Score із покриттям даних, пояснюваний Home Score, погодні застереження та прогноз витрат із рівнем впевненості.",
+        "🏠 Можливості\nПереглядайте температуру й вологість у кімнатах, стан датчиків, споживання електроенергії та прогноз погоди. Бот надсилає ранкове й вечірнє зведення, попереджає про важливі події та пропонує дії. Оцінки дому й сну супроводжуються поясненням і показником повноти даних.",
       channels:
-        "📣 КАНАЛИ\nДодайте бота адміністратором каналу, потім використайте майстер «Додати канал».",
+        "📣 Канали сповіщень\nСпершу додайте бота до каналу й надайте йому право надсилати повідомлення. Потім оберіть «Додати канал» і введіть його @назву або ID.",
       notify:
-        "🔔 СПОВІЩЕННЯ\nAI Caretaker, Smart Digest, стан датчиків і небезпечна погода налаштовуються окремими категоріями. Рекомендації групуються за ключем і не повторюються без зміни.",
+        "🔔 СПОВІЩЕННЯ\nУ розділі «Канали» оберіть, куди надсилати повідомлення. У «Категоріях» увімкніть потрібні типи сповіщень. Для окремого каналу можна задати власні категорії та тихі години.",
       schedule:
-        "🕒 РОЗКЛАДИ\nЧас Europe/Kyiv. Scheduler надолужує останній пропущений звіт та не дублює виконаний запуск.",
-      ai: "🤖 AI\nAI Caretaker групує факти про критичні події, клімат, енергію, погоду, Home Score і Sleep Score. Якщо AI недоступний, надсилається детермінований звіт. Загальні питання використовують read-only SQL.",
+        "🕒 Розклад повідомлень\nЧас указано за Києвом. Якщо звіт пропущено через коротку перерву, бот надішле його під час наступного запуску. Уже надіслані звіти не повторюються.",
+      ai: "🤖 Помічник зі штучним інтелектом\nAI Caretaker збирає найважливіші факти про події, клімат, електроенергію та погоду. Якщо AI тимчасово недоступний, бот сформує звіт без нього. Для запитань про дані дому використовується лише читання бази даних.",
       security:
         "🔐 БЕЗПЕКА\nАдмін — TELEGRAM_CHAT_ID. SQL тільки SELECT. /agent/run вимагає AGENT_SECRET.",
     }[k] || "❓ Оберіть розділ довідки."
@@ -41,7 +41,7 @@ export async function recommendationCenter(e, filter = "active") {
   for (const r of rows) {
     let evidence = {};
     try { evidence = JSON.parse(r.lifecycle_json || r.metadata_json || "{}"); } catch {}
-    lines.push(`\n${r.priority === "critical" ? "🔴" : r.priority === "high" || r.priority === "warning" ? "🟠" : "ℹ️"} ${r.title}${r.room_id ? ` · ${r.room_id}` : ""}\n${r.message}${r.action ? `\nДія: ${r.action}` : ""}${r.last_seen_at ? `\nОновлено: ${r.last_seen_at}` : ""}`);
+    lines.push(`\n${r.priority === "critical" ? "🔴 Важливо" : r.priority === "high" || r.priority === "warning" ? "🟠 Зверніть увагу" : "ℹ️ Порада"} · ${r.title}${r.room_id ? `\nКімната: ${r.room_id}` : ""}\n${r.message}${r.action ? `\nЩо зробити: ${r.action}` : ""}${r.last_seen_at ? `\nОновлено: ${r.last_seen_at}` : ""}`);
     if (filter === "done") continue;
     keyboard.push([{ text: "✅ Виконано", callback_data: `recdone:${r.id}` }, { text: "🔕 1 год", callback_data: `recsnooze:${r.id}:60` }, { text: "🔕 До завтра", callback_data: `recsnooze:${r.id}:tomorrow` }]);
     keyboard.push([{ text: "📋 Деталі", callback_data: `recdetail:${r.id}` }, { text: "👎 Не корисно", callback_data: `recbad:${r.id}` }]);
@@ -121,7 +121,7 @@ export async function channelDetails(e, channelId) {
       `Статус: ${c.enabled ? "✅ увімкнений" : "⛔ вимкнений"}`,
       `Тихі години: ${c.quiet_enabled ? `${c.quiet_start}–${c.quiet_end}` : "вимкнені"}`,
       `Індивідуальні категорії: ${overrides}`,
-    ].join("\\n"),
+    ].join("\n"),
     keyboard: {
       inline_keyboard: [
         [
@@ -189,7 +189,7 @@ export async function channelCats(e, channelId, page = 0) {
     [{ text: "⬅️ До каналу", callback_data: `ch:${channelId}` }],
   );
   return {
-    title: `🔔 ${c.channel_name || c.chat_id}\\nНатисніть категорію, щоб перемкнути.`,
+    title: `🔔 ${c.channel_name || c.chat_id}\nОберіть категорії, які надсилати в цей канал.`,
     keyboard: { inline_keyboard: b },
   };
 }
@@ -241,17 +241,17 @@ export async function diag(e) {
     pending=await e.DB.prepare("SELECT COUNT(*) count,MIN(flush_after) next_flush FROM event_buffer WHERE status='pending'").first(),
     recs=await e.DB.prepare("SELECT COUNT(*) count FROM recommendations WHERE status='active'").first();
   return [
-    "🩺 ДІАГНОСТИКА",
-    `D1 ${e.DB ? "✅" : "⛔"}`,
-    `AI ${e.AI ? "✅" : "⛔"}`,
-    `Telegram ${e.TELEGRAM_BOT_TOKEN ? "✅" : "⛔"}`,
-    `Cron ${st ? st.updated_at : "немає"}`,
-    `Weather ${x.weather ? "✅" : "⛔"}`,
-    `Nodes ${x.zones.length - off}/${x.zones.length}`,
-    `Active recommendations ${recs?.count ?? "—"}`,
-    `Buffered event groups ${pending?.count ?? 0}${pending?.next_flush ? ` · next ${pending.next_flush}` : ""}`,
-    ...jobs.results.map(j=>`Scheduler ${j.last_status}: ${j.count} · last success ${j.last_success_at||"—"}${j.last_error?` · ${j.last_error}`:""}`),
-    `Power ${x.power && age(x.power.created_at) <= 15 ? "✅" : "⛔"}`,
+    "🩺 Стан бота",
+    `База даних: ${e.DB ? "✅ доступна" : "⛔ недоступна"}`,
+    `AI: ${e.AI ? "✅ доступний" : "⛔ недоступний"}`,
+      `Зв’язок із Telegram: ${e.TELEGRAM_BOT_TOKEN ? "✅ налаштований" : "⛔ не налаштований"}`,
+    `Останній запуск: ${st ? st.updated_at : "ще не було"}`,
+    `Погодні дані: ${x.weather ? "✅ отримано" : "⛔ відсутні"}`,
+    `Свіжі датчики: ${x.zones.length - off} із ${x.zones.length}`,
+    `Активні рекомендації: ${recs?.count ?? "—"}`,
+    `Події в черзі: ${pending?.count ?? 0}${pending?.next_flush ? ` · наступна відправка ${pending.next_flush}` : ""}`,
+    ...jobs.results.map(j=>`Розклад (${j.last_status}): ${j.count} · останній успіх ${j.last_success_at||"—"}${j.last_error?` · помилка: ${j.last_error}`:""}`),
+    `Лічильник електроенергії: ${x.power && age(x.power.created_at) <= 15 ? "✅ дані свіжі" : "⛔ дані застаріли"}`,
   ].join("\n");
 }
 export async function live(e, id) {

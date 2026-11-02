@@ -57,7 +57,9 @@ export async function callback(e, q) {
     const row=await e.DB.prepare("SELECT r.*,l.metadata_json,l.fingerprint,l.first_seen_at,l.last_seen_at FROM recommendations r LEFT JOIN recommendation_lifecycle l ON l.recommendation_key=r.recommendation_key WHERE r.id=?").bind(n(d.slice(10))).first();
     if (!row) return send(e,id,"Рекомендацію не знайдено.");
     let metadata={}; try { metadata=JSON.parse(row.metadata_json||"{}"); } catch {}
-    return send(e,id,`📋 ${row.title}\n${row.message}\nДія: ${row.action||"—"}\nПріоритет: ${row.priority}\nКлюч: ${row.recommendation_key}\nВперше: ${row.first_seen_at||row.created_at||"—"}\nОновлено: ${row.last_seen_at||"—"}\nДані: ${JSON.stringify(metadata).slice(0,1000)}`);
+    const priority = ({ critical: "Критично", high: "Високий", warning: "Попередження", medium: "Середній", low: "Низький", info: "Інформація" })[row.priority] || "Звичайний";
+    const evidence = Object.entries(metadata).slice(0, 8).map(([key, value]) => `• ${key.replaceAll("_", " ")}: ${typeof value === "object" && value !== null ? JSON.stringify(value) : String(value)}`);
+    return send(e,id,[`📋 ${row.title}`,"",row.message,`Що зробити: ${row.action||"дія не вказана"}`,`Важливість: ${priority}`,`Додано: ${row.first_seen_at||row.created_at||"—"}`,`Останнє оновлення: ${row.last_seen_at||"—"}`,...(evidence.length?["","Додаткові дані",...evidence]:[])].join("\n"));
   }
   if (d.startsWith("alert:ack:")) {
     const aid = n(d.split(":")[2]);
@@ -240,12 +242,12 @@ export async function callback(e, q) {
       e,
       id,
       mid,
-      r
+      `Події — ${resolved ? "вирішені" : "активні"}\nДії внизу стосуються найновішої події #${first.id}.\n\n${r
         .map(
           (a) =>
-            `${a.severity === "critical" ? "🔴" : "🟠"} #${a.id} ${a.alert_message}`,
+            `${a.severity === "critical" ? "🔴 Критична подія" : "🟠 Попередження"} · ${a.created_at || "час невідомий"}\n${a.alert_message}`,
         )
-        .join("\n"),
+        .join("\n\n")}`,
       {
         inline_keyboard: [
           [
@@ -270,9 +272,9 @@ export async function callback(e, q) {
       mid,
       r
         .map(
-          (a) => `${a.created_at.slice(5, 16)} ${a.title}\n${a.message || ""}`,
+          (a) => `📅 ${String(a.created_at || "").slice(0, 16)}\n${a.title}${a.message && a.message !== a.title ? `\n${a.message}` : ""}`,
         )
-        .join("\n\n") || "Timeline порожній",
+        .join("\n\n") || "Історія подій поки порожня",
       EVENTS,
     );
   }
@@ -304,7 +306,7 @@ export async function callback(e, q) {
       await send(
         e,
         c.chat_id,
-        "✅ Тест Home Monitor\\nКанал підключений і готовий отримувати повідомлення.",
+        "✅ Тест Home Monitor\nКанал підключений і готовий отримувати повідомлення.",
       );
       return send(e, id, `✅ Тест надіслано в ${c.channel_name || c.chat_id}.`);
     } catch (err) {
@@ -410,7 +412,7 @@ export async function callback(e, q) {
       e,
       id,
       mid,
-      `🗑 Видалити канал «${c.channel_name || c.chat_id}»?\\n\\nБуде видалено канал та його індивідуальні налаштування.`,
+      `🗑 Видалити канал «${c.channel_name || c.chat_id}»?\n\nБуде видалено канал та його індивідуальні налаштування.`,
       {
         inline_keyboard: [
           [{ text: "🗑 Так, видалити", callback_data: `chdelok:${channelId}` }],

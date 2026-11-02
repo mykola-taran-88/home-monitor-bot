@@ -1,6 +1,6 @@
 import { CATS, age, fmt, n, kyivDateTime } from "../constants.js";
 import { schema, latest, score, now } from "../database.js";
-import { analyticsText, energyText, forecastDayLabel, homeSummaryRich, scoreText, weatherForecast48hText, smartMorningDigest, caretakerReport } from "../reports.js";
+import { analyticsText, energyText, forecastDayLabel, homeSummaryRich, scoreText, weatherForecast48hText, smartMorningDigest, caretakerReport, kyivDate } from "../reports.js";
 import { flushEventBuffer, maintenance, push, pushChartPack, stateEvent } from "../notifications.js";
 import { live } from "../menus.js";
 import { send } from "../telegram.js";
@@ -50,8 +50,8 @@ export async function agent(e) {
       `sensor:${id}`,
       isOffline,
       "device_health",
-      `📡 ${z.device_name || id}: датчик offline.`,
-      `✅ ${z.device_name || id}: датчик знову online.`,
+      `📡 ${z.device_name || id}: датчик не передає дані понад 15 хвилин.`,
+      `✅ ${z.device_name || id}: передавання даних відновлено.`,
     );
   }
   const powerOffline =
@@ -61,8 +61,8 @@ export async function agent(e) {
       "power-meter",
       powerOffline,
       "device_health",
-      "⚡ Power Meter: немає даних понад 15 хв.",
-      "✅ Power Meter: передачу даних відновлено.",
+      "⚡ Лічильник електроенергії не передає дані понад 15 хвилин.",
+      "✅ Лічильник електроенергії знову передає дані.",
     );
   await flushEventBuffer(e);
   const max = n(
@@ -122,7 +122,7 @@ export async function agent(e) {
         :allHazards.includes("спека")?"Обмежте тривале перебування на сонці та пийте воду."
         :allHazards.includes("мороз")?"Зважайте на ризик переохолодження та обмерзання."
         :"За можливості візьміть парасолю та перевірте умови перед виходом.";
-    await push(e,"weather_forecast",`hazard:${fingerprint}`,`${urgency} ПОГОДНЕ ЗАСТЕРЕЖЕННЯ · орієнтовно за 2 години\n${items}\n${advice}`,false,true);
+    await push(e,"weather_forecast",`hazard:${fingerprint}`,`${urgency} Погодні умови можуть бути небезпечними\nПрогноз приблизно на найближчі 2 години:\n${items}\n\nПорада: ${advice}`,false,true);
   }
   const rainProb = n(x.daily[0]?.precipitation_probability),
     rainState = await e.DB.prepare(
@@ -135,8 +135,8 @@ export async function agent(e) {
     "rain",
     rainActive,
     "weather_alerts",
-    `☔ Високий ризик дощу: ${rainProb}% (${x.daily[0]?.forecast_date || p.date}).`,
-    `✅ Ризик дощу знизився до ${rainProb}%.`,
+      `☔ Імовірність дощу сьогодні — ${rainProb}% (${x.daily[0]?.forecast_date || p.date}).`,
+    `✅ Імовірність дощу знизилася до ${rainProb}%.`,
   );
   for (const r of x.recs) {
     if (r.category === "device_health") continue;
@@ -146,7 +146,7 @@ export async function agent(e) {
     ), occurrence = Math.max(1, n(r.occurrence_count, 1)),
       notificationKey = occurrence > 1 ? `${stable}:v${occurrence}` : stable,
       icon = r.category === "ventilation" ? "💨" : "💡",
-      sent = await push(e, "recommendations", notificationKey, `${icon} ${r.title}\n${r.message}`, false, occurrence > 1);
+      sent = await push(e, "recommendations", notificationKey, `${icon} ${r.title}\n${r.message}${r.action ? `\n\nЩо зробити: ${r.action}` : ""}`, false, occurrence > 1);
     if (sent)
       await e.DB.prepare(
         "UPDATE recommendation_lifecycle SET last_notified_at=CURRENT_TIMESTAMP WHERE recommendation_key=?",
@@ -155,7 +155,7 @@ export async function agent(e) {
       const reminderHours = n((await e.DB.prepare("SELECT setting_value FROM settings WHERE setting_key='high_priority_reminder_hours'").first())?.setting_value, 24),
         last = new Date(String(r.last_notified_at).replace(" ", "T") + "Z");
       if (Date.now() - last.getTime() >= reminderHours * 3600000) {
-        const reminderSent = await push(e, "recommendations", `${notificationKey}:reminder:${Math.floor(Date.now() / (reminderHours * 3600000))}`, `🔔 Нагадування · ${r.title}\n${r.message}${r.action ? `\nДія: ${r.action}` : ""}`);
+        const reminderSent = await push(e, "recommendations", `${notificationKey}:reminder:${Math.floor(Date.now() / (reminderHours * 3600000))}`, `🔔 Нагадування: ${r.title}\n${r.message}${r.action ? `\n\nЩо зробити: ${r.action}` : ""}`);
         if (reminderSent) await e.DB.prepare("UPDATE recommendation_lifecycle SET last_notified_at=CURRENT_TIMESTAMP WHERE recommendation_key=?").bind(stable).run();
       }
     }
@@ -165,7 +165,7 @@ export async function agent(e) {
         `condensation:${r.room_id || stable}`,
         true,
         "condensation_risk",
-        `💧 ${r.title}\n${r.message}`,
+        `💧 ${r.title}\n${r.message}${r.action ? `\n\nЩо зробити: ${r.action}` : ""}`,
         null,
       );
   }
@@ -196,14 +196,15 @@ export async function agent(e) {
     try {
       let msg, keyboard=null, key=due.jobKey;
       if (q.category_key === "morning_report") { const d=await smartMorningDigest(e); msg=d.text; keyboard=d.keyboard; }
-      else if (q.category_key === "evening_report") msg=`🌙 ВЕЧІРНІЙ ПІДСУМОК\n${await energyText(e)}\n📊 Home Score: ${s.overall}/100 · впевненість ${s.confidence}%`;
-      else if (q.category_key === "energy_cost") msg=`💰 КОНТРОЛЬ ВИТРАТ\n${await energyText(e)}`;
-      else if (q.category_key === "weekly_digest") msg=`📈 ТИЖНЕВА АНАЛІТИКА\n${await analyticsText(e,7)}\n\n${await scoreText(e)}`;
-      else if (q.category_key === "monthly_digest") msg=`📊 МІСЯЧНА АНАЛІТИКА\n${await analyticsText(e,30)}\n\n${await scoreText(e)}`;
+      else if (q.category_key === "evening_report") msg=`🌙 Підсумок за день\n\n${await energyText(e)}\n\nОцінка дому: ${s.overall} зі 100 · повнота даних ${s.confidence}%`;
+      else if (q.category_key === "energy_cost") msg=`💰 Витрати на електроенергію\n\n${await energyText(e)}`;
+      else if (q.category_key === "weekly_digest") msg=`📈 Підсумок за 7 днів\n\n${await analyticsText(e,7)}\n\n${await scoreText(e)}`;
+      else if (q.category_key === "monthly_digest") msg=`📊 Підсумок за 30 днів\n\n${await analyticsText(e,30)}\n\n${await scoreText(e)}`;
       else if (q.category_key === "weather_forecast") msg=await weatherForecast48hText(e);
       else if (q.category_key === "ai_insights") { const c=await caretakerReport(e); msg=c.text; key=`caretaker:${c.dedupeKey}`; keyboard=c.keyboard; }
       else msg=`${CATS[q.category_key]?.[0]} ${CATS[q.category_key]?.[1]}\n${await homeSummaryRich(e)}`;
       const sent=await push(e,q.category_key,key,msg,false,false,keyboard);
+      if(q.category_key==="morning_report") await pushChartPack(e,q.category_key,key,1,{endDate:kyivDate(-1)});
       if(q.category_key==="weekly_digest") await pushChartPack(e,q.category_key,key,7);
       if(q.category_key==="monthly_digest") await pushChartPack(e,q.category_key,key,30);
       await e.DB.prepare("UPDATE scheduled_jobs_state SET last_due_at=?,last_success_at=CURRENT_TIMESTAMP,last_status=?,last_error=NULL,lock_until=NULL,updated_at=CURRENT_TIMESTAMP WHERE job_key=?").bind(due.dueAt,sent?"sent":"completed",due.jobKey).run();
@@ -221,7 +222,7 @@ export async function agent(e) {
   const queuedGroups=new Map();
   for(const item of q){const k=`${item.chat_id}:${item.category_key}`,group=queuedGroups.get(k)||[];group.push(item);queuedGroups.set(k,group);}
   for(const group of queuedGroups.values()) try {
-    const first=group[0], text=`🌙 ПІДСУМОК ПІСЛЯ ТИХИХ ГОДИН\n${group.map(a=>`• ${a.message}`).join("\n\n")}`.slice(0,3900);
+    const first=group[0], text=`🌙 Сповіщення після тихих годин\n${group.map(a=>`• ${a.message}`).join("\n\n")}`.slice(0,3900);
     await send(e,first.chat_id,text);
     await e.DB.batch(group.flatMap(a=>[
       e.DB.prepare("INSERT OR IGNORE INTO notification_log(dedupe,chat_id,category_key,message) VALUES(?,?,?,?)").bind(a.dedupe,a.chat_id,a.category_key,a.message),
@@ -241,7 +242,7 @@ export async function agent(e) {
       e,
       "ai_insights",
       `anom:${p.date}:${p.hour}`,
-      `🧠 Аномалія: ${fmt(av.a, 0)} Вт проти типових ${fmt(base.a, 0)} Вт`,
+      `🧠 Незвичне споживання: середня потужність за останню годину — ${fmt(av.a, 0)} Вт. Звичне середнє за 7 днів — ${fmt(base.a, 0)} Вт.`,
     );
     await e.DB.prepare(
       "INSERT INTO home_timeline(category,title,message,severity) VALUES('energy','Аномалія навантаження',?,'warning')",

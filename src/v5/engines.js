@@ -17,7 +17,7 @@ export function explainScore(x, timeoutMinutes = 15) {
     ],
     deductions = [];
   if(climate!=null&&climate<100) deductions.push({code:"comfort",label:`Комфорт ${climate}/100`,points:+((100-climate)*.65).toFixed(2),evidence:{comfort:climate}});
-  const raw=[{code:"offline_sensors",label:`${offline} несвіжих/offline датчиків`,value:offline*15},{code:"critical_alerts",label:`${critical} критичних алертів`,value:critical*20},{code:"active_alerts",label:`${alerts.length} активних алертів`,value:alerts.length*3}],
+  const raw=[{code:"offline_sensors",label:`${offline} датчиків не передають свіжі дані`,value:offline*15},{code:"critical_alerts",label:`${critical} критичних подій`,value:critical*20},{code:"active_alerts",label:`${alerts.length} активних подій`,value:alerts.length*3}],
     scale=healthPenalty>100?100/healthPenalty:1;
   for(const d of raw) if(d.value) deductions.push({code:d.code,label:d.label,points:+(d.value*scale*(climate==null?1:.35)).toFixed(2),evidence:{count:d.value/(d.code==="offline_sensors"?15:d.code==="critical_alerts"?20:3)}});
   return {overall,comfort:climate,health,confidence,components,deductions,positives:[]};

@@ -1,7 +1,7 @@
 import { now } from "./database.js";
 import { n } from "./constants.js";
 import { send } from "./telegram.js";
-import { sendChartPack } from "./reports.js";
+import { chartConfigs, sendChartPack } from "./reports.js";
 import { quietEndUtc as getQuietEndUtc } from "./v5/scheduler.js";
 
 export async function categoryChannels(e, cat) {
@@ -13,10 +13,13 @@ export async function categoryChannels(e, cat) {
       .all()
   ).results;
 }
-export async function pushChartPack(e, cat, key, days) {
+export async function pushChartPack(e, cat, key, days, options = {}) {
   const setting=await e.DB.prepare("SELECT enabled FROM notification_settings WHERE category_key=?").bind(cat).first();
   if (!setting?.enabled) return;
   const channels = await categoryChannels(e, cat);
+  if (!channels.length) return;
+  const configs = await chartConfigs(e, days, options),
+    chartOptions = { ...options, configs };
   for (const c of channels) {
     const dedupe = `chart:${cat}:${key}:${c.chat_id}`,
       exists = await e.DB.prepare(
@@ -26,11 +29,11 @@ export async function pushChartPack(e, cat, key, days) {
         .first();
     if (exists) continue;
     try {
-      await sendChartPack(e, c.chat_id, days);
+      await sendChartPack(e, c.chat_id, days, chartOptions);
       await e.DB.prepare(
         "INSERT OR IGNORE INTO notification_log(dedupe,chat_id,category_key,message) VALUES(?,?,?,?)",
       )
-        .bind(dedupe, c.chat_id, cat, `Chart pack ${days}d`)
+        .bind(dedupe, c.chat_id, cat, `Chart pack ${days}d${options.endDate ? ` ending ${options.endDate}` : ""}`)
         .run();
     } catch (err) {
       console.error("PUSH_CHART", err);
@@ -45,7 +48,7 @@ export async function flushEventBuffer(e) {
     if (!(claim.meta?.changes>0)) continue;
     try {
       const payload=JSON.parse(row.payload_json||"{}"), items=payload.items||[], active=payload.active!==false,
-        heading=active?"📡 Датчики offline":"✅ Відновлення датчиків",
+        heading=active?"⚠️ Датчики не передають дані":"✅ Зв’язок із датчиками відновлено",
         body=items.map(x=>`• ${x.message||x.name}`).join("\n"),
         key=`event-buffer:${row.id}`;
       const accepted=await push(e,row.category_key,key,`${heading}\n${body}`,false,false);

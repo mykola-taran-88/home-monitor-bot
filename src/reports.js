@@ -150,22 +150,23 @@ export async function energyOverview(e) {
 export async function energyText(e) {
   const x = await energyOverview(e);
   return [
-    "⚡ ЕНЕРГІЯ",
-    `Поточна потужність: ${fmt(x.current?.power, 0)} Вт`,
-    `Напруга: ${fmt(x.current?.voltage, 1)} В`,
-    `Струм: ${fmt(x.current?.current, 2)} А`,
-    `Частота: ${fmt(x.current?.frequency, 1)} Гц`,
+    "⚡ Енергія",
+    "Зараз",
+    `Потужність: ${fmt(x.current?.power, 0)} Вт`,
+    `Напруга: ${fmt(x.current?.voltage, 1)} В · струм: ${fmt(x.current?.current, 2)} А · частота: ${fmt(x.current?.frequency, 1)} Гц`,
     "",
-    `📅 Сьогодні: ${fmt(x.today.total, 3)} кВт·год · ${fmt(x.today.cost, 2)} грн`,
-    `📆 7 днів: ${fmt(x.week.total, 3)} кВт·год · ${fmt(x.week.cost, 2)} грн`,
-    `🗓 Цей місяць: ${fmt(x.month.total, 3)} кВт·год · ${fmt(x.month.cost, 2)} грн`,
-    `📊 Прогноз: ${fmt(x.forecastCost, 0)} грн · орієнтир ${fmt(x.forecastLow, 0)}–${fmt(x.forecastHigh, 0)} грн`,
-    `Впевненість: ${x.forecastConfidence} · проєкція за середнім фактом на день`,
-    `Середнє за день: ${fmt(x.month.cost / Math.max(1, now().day), 2)} грн · дані є за ${x.observedHours} з ${x.elapsedHours} год`,
-    `🌙 День / ніч: ${fmt(x.month.day, 3)} / ${fmt(x.month.night, 3)} кВт·год`,
+    "Споживання та вартість",
+    `Сьогодні: ${fmt(x.today.total, 3)} кВт·год · ${fmt(x.today.cost, 2)} грн`,
+    `За 7 днів: ${fmt(x.week.total, 3)} кВт·год · ${fmt(x.week.cost, 2)} грн`,
+    `Від початку місяця: ${fmt(x.month.total, 3)} кВт·год · ${fmt(x.month.cost, 2)} грн`,
+    `День / ніч: ${fmt(x.month.day, 3)} / ${fmt(x.month.night, 3)} кВт·год`,
     "",
-    `📈 Пік сьогодні: ${fmt(x.peak?.power, 0)} Вт${x.peak?.created_at ? ` о ${String(x.peak.created_at).slice(11, 16)}` : ""}`,
-    `🔮 Прогноз місяця: ${fmt(x.forecastKwh, 1)} кВт·год · ${fmt(x.forecastCost, 0)} грн`,
+    "Прогноз до кінця місяця",
+    `Витрати: ${fmt(x.forecastCost, 0)} грн · орієнтовний діапазон ${fmt(x.forecastLow, 0)}–${fmt(x.forecastHigh, 0)} грн`,
+    `Споживання: ${fmt(x.forecastKwh, 1)} кВт·год · точність: ${x.forecastConfidence}`,
+    `Розрахунок: середні витрати за день. Дані є за ${x.observedHours} із ${x.elapsedHours} год`,
+    "",
+    `Найбільша потужність сьогодні: ${fmt(x.peak?.power, 0)} Вт${x.peak?.created_at ? ` о ${String(x.peak.created_at).slice(11, 16)}` : ""}`,
   ].join("\n");
 }
 export function forecastDayLabel(date) {
@@ -200,24 +201,24 @@ export async function weatherTextRich(e) {
     hourly.push(`📅 ${forecastDayLabel(date)}`);
     for (const h of items)
       hourly.push(
-        `${String(h.forecast_time).slice(11, 16)} ${weatherEmoji(h.weather_code)} ${fmt(h.temperature)} °C · дощ ${fmt(h.precipitation_probability, 0)}%`,
+        `${String(h.forecast_time).slice(11, 16)} ${weatherEmoji(h.weather_code)} ${fmt(h.temperature)} °C · опади ${fmt(h.precipitation_probability, 0)}%`,
       );
     hourly.push("");
   }
   const daily = x.daily.slice(0, 3);
   return [
-    "🌦 ПОГОДА",
-    `${weatherEmoji(x.weather?.weather_code)} Зараз: ${fmt(x.weather?.temperature)} °C · ${fmt(x.weather?.humidity, 0)}%`,
-    `Умови: ${weatherName(x.weather?.weather_code)}`,
-    `Вітер: ${fmt(x.weather?.wind_speed, 1)} км/год · Тиск: ${fmt(x.weather?.pressure, 0)} гПа`,
+    "🌦 Погода",
+    "Зараз",
+    `${weatherEmoji(x.weather?.weather_code)} ${weatherName(x.weather?.weather_code)} · ${fmt(x.weather?.temperature)} °C`,
+    `Вологість: ${fmt(x.weather?.humidity, 0)}% · вітер: ${fmt(x.weather?.wind_speed, 1)} км/год · тиск: ${fmt(x.weather?.pressure, 0)} гПа`,
     "",
-    "📅 Прогноз на 3 дні:",
+    "На 3 дні · мінімум…максимум · імовірність опадів",
     ...daily.map(
       (d) =>
-        `${weatherEmoji(d.weather_code)} ${forecastDayLabel(String(d.forecast_date).slice(0, 10))}: ${fmt(d.temp_min)}…${fmt(d.temp_max)} °C · дощ ${fmt(d.precipitation_probability, 0)}%`,
+        `${weatherEmoji(d.weather_code)} ${forecastDayLabel(String(d.forecast_date).slice(0, 10))}: ${fmt(d.temp_min)}…${fmt(d.temp_max)} °C · опади ${fmt(d.precipitation_probability, 0)}%`,
     ),
     "",
-    "🕒 Найближчі 24 години (крок 3 год):",
+    "Погодинний прогноз на 24 години · крок 3 год",
     ...hourly,
   ]
     .join("\n")
@@ -236,12 +237,12 @@ export async function weatherForecast48hText(e) {
     const date = String(h.forecast_time || "").slice(0, 10);
     (groups[date] ??= []).push(h);
   }
-  const lines = ["🌦 ПРОГНОЗ ПОГОДИ НА НАСТУПНІ 27 ГОДИН", "Крок прогнозу — 3 години."];
+  const lines = ["🌦 Погода на найближчі 27 годин", "Оновлення прогнозу — кожні 3 години. Імовірність опадів указано у відсотках."];
   for (const [date, items] of Object.entries(groups)) {
     lines.push("", `📅 ${forecastDayLabel(date)}`);
     for (const h of items)
       lines.push(
-        `${String(h.forecast_time).slice(11, 16)} ${weatherEmoji(h.weather_code)} ${fmt(h.temperature)} °C · дощ ${fmt(h.precipitation_probability, 0)}%${n(h.wind_speed) >= 50 ? ` · вітер ${fmt(h.wind_speed, 0)} км/год` : ""}`,
+        `${String(h.forecast_time).slice(11, 16)} ${weatherEmoji(h.weather_code)} ${fmt(h.temperature)} °C · опади ${fmt(h.precipitation_probability, 0)}%${n(h.wind_speed) >= 50 ? ` · сильний вітер ${fmt(h.wind_speed, 0)} км/год` : ""}`,
       );
   }
   return lines.join("\n");
@@ -276,19 +277,19 @@ export async function scoreText(e) {
   if (x.power?.voltage >= 200 && x.power?.voltage <= 250)
     reasons.push("✅ Напруга в нормальному діапазоні");
   return [
-    "📊 HOME SCORE",
-    `Загальна оцінка: ${s.overall}/100`,
-    `Клімат: ${s.comfort == null ? "немає достатніх даних" : `${s.comfort}/100`}`,
-    `Стан системи: ${s.health}/100`,
-    `Впевненість оцінки: ${s.confidence}%`,
-    `Свіжі кліматичні дані: ${coverage.percent == null ? "немає кімнатних датчиків" : `${coverage.fresh}/${coverage.expected} датчиків · ${coverage.percent}%`}`,
+    "📊 Оцінка дому",
+    `Загальна оцінка: ${s.overall} зі 100`,
+    `Комфорт у кімнатах: ${s.comfort == null ? "недостатньо даних" : `${s.comfort} зі 100`}`,
+    `Надійність системи: ${s.health} зі 100`,
+    `Повнота даних для оцінки: ${s.confidence}%`,
+    `Свіжі кімнатні датчики: ${coverage.percent == null ? "немає" : `${coverage.fresh} із ${coverage.expected} · ${coverage.percent}%`}`,
     "",
-    "Що вплинуло на оцінку:",
+    "Що знизило оцінку",
     ...(s.deductions.length
       ? s.deductions.map((d) => `−${fmt(d.points, 0)}: ${d.label}`)
       : ["✅ Немає зафіксованих списань балів"]),
     "",
-    "Що добре:",
+    "Стан системи",
     ...reasons.filter((x) => x.startsWith("✅")),
     ...reasons.filter((x) => !x.startsWith("✅")),
     "",
@@ -315,23 +316,26 @@ export async function homeSummaryRich(e) {
   const roomLines = z.slice(0, 4).map((room) => {
     const minutes = age(room.created_at), fresh = minutes != null && minutes <= 15,
       roomComfort = room.humidity == null ? null : comfort(room.temperature, room.humidity);
-    return `${roomIcon(room.device_name || room.device_id, room.is_outdoor)} ${room.device_name || room.device_id}: ${fmt(room.temperature)}°C · ${fmt(room.humidity, 0)}% · ${roomComfort != null && roomComfort < 65 ? "🔴" : roomComfort != null && roomComfort < 80 ? "🟡" : "🟢"} комфорт ${roomComfort == null ? "—" : `${roomComfort}/100`} · ${fresh ? `дані ${minutes} хв тому` : `несвіжі дані${minutes == null ? "" : ` · ${minutes} хв`}`}`;
+    return `${roomIcon(room.device_name || room.device_id, room.is_outdoor)} ${room.device_name || room.device_id}\n  ${fmt(room.temperature)} °C · вологість ${fmt(room.humidity, 0)}% · комфорт ${roomComfort == null ? "немає оцінки" : `${roomComfort} зі 100`}\n  ${fresh ? `✅ Дані оновлено ${minutes} хв тому` : `⚠️ Дані застаріли${minutes == null ? "" : ` · ${minutes} хв тому`}`}`;
   });
   const coverage = climateCoverage(x.zones);
   return [
-    "🏠 ЗВЕДЕННЯ ДОМУ",
-    `📊 Home Score: ${s.overall}/100`,
-    `🌡 Вдома: ${fmt(avg)} °C`,
-    `📡 Свіжі кліматичні дані: ${coverage.percent == null ? "немає кімнатних датчиків" : `${coverage.fresh}/${coverage.expected} · ${coverage.percent}%`}`,
-    ...roomLines,
-    `⚡ Зараз: ${fmt(x.power?.power, 0)} Вт · ${fmt(x.power?.voltage, 1)} В · ${age(x.power?.created_at) == null ? "немає часу виміру" : `дані ${age(x.power.created_at)} хв тому`}`,
-    `📅 Сьогодні: ${fmt(en.today.total, 3)} кВт·год · ${fmt(en.today.cost, 2)} грн`,
-    `🗓 Місяць: ${fmt(en.month.total, 3)} кВт·год · ${fmt(en.month.cost, 2)} грн`,
-    `🔮 Прогноз витрат: ${fmt(en.forecastCost, 0)} грн · орієнтир ${fmt(en.forecastLow, 0)}–${fmt(en.forecastHigh, 0)} грн · ${en.forecastConfidence}`,
+    "🏠 Стан дому",
+    `Оцінка: ${s.overall} зі 100 · повнота даних ${s.confidence}%`,
+    `Середня температура в кімнатах: ${fmt(avg)} °C`,
+    `Свіжі кімнатні датчики: ${coverage.percent == null ? "немає" : `${coverage.fresh} із ${coverage.expected} · ${coverage.percent}%`}`,
+    ...(roomLines.length ? ["", "Кімнати", ...roomLines] : ["", "Кімнатних показників поки немає."]),
     "",
-    `🌦 Сьогодні: ${today ? `${fmt(today.temp_min)}…${fmt(today.temp_max)} °C · дощ ${fmt(today.precipitation_probability, 0)}%` : "—"}`,
-    `🌦 Завтра: ${tomorrow ? `${fmt(tomorrow.temp_min)}…${fmt(tomorrow.temp_max)} °C · дощ ${fmt(tomorrow.precipitation_probability, 0)}%` : "—"}`,
-    `🚨 Активні алерти: ${x.alerts.length}`,
+    "Електроенергія",
+    `Зараз: ${fmt(x.power?.power, 0)} Вт · ${fmt(x.power?.voltage, 1)} В${age(x.power?.created_at) == null ? " · час виміру невідомий" : ` · оновлено ${age(x.power.created_at)} хв тому`}`,
+    `Сьогодні: ${fmt(en.today.total, 3)} кВт·год · ${fmt(en.today.cost, 2)} грн`,
+    `Від початку місяця: ${fmt(en.month.total, 3)} кВт·год · ${fmt(en.month.cost, 2)} грн`,
+    `Прогноз витрат за місяць: ${fmt(en.forecastCost, 0)} грн · орієнтир ${fmt(en.forecastLow, 0)}–${fmt(en.forecastHigh, 0)} грн (${en.forecastConfidence})`,
+    "",
+    "Погода",
+    `Сьогодні: ${today ? `${fmt(today.temp_min)}…${fmt(today.temp_max)} °C · опади ${fmt(today.precipitation_probability, 0)}%` : "даних немає"}`,
+    `Завтра: ${tomorrow ? `${fmt(tomorrow.temp_min)}…${fmt(tomorrow.temp_max)} °C · опади ${fmt(tomorrow.precipitation_probability, 0)}%` : "даних немає"}`,
+    `Активні події: ${x.alerts.length}`,
     x.recs[0]
       ? `💡 ${x.recs[0].title}: ${x.recs[0].message}`
       : "✅ Термінових рекомендацій немає",
@@ -348,14 +352,14 @@ export async function sleepText(e) {
     : `${label}: недостатньо даних`;
   return [
     "🌙 НІЧНИЙ ПІДСУМОК",
-    `Sleep Score дому: ${row.score ?? "—"}/100 · даних ${row.confidence}%`,
-    c.devices_total != null ? `📡 Датчики: ${c.devices_seen ?? 0}/${c.devices_total} працювали вночі` : "",
+    `Оцінка сну: ${row.score ?? "—"} зі 100 · повнота даних ${row.confidence}%`,
+    c.devices_total != null ? `Датчики працювали вночі: ${c.devices_seen ?? 0} із ${c.devices_total}` : "",
     c.coverage != null ? `Покриття вимірювань: ${fmt(c.coverage, 0)}%` : "",
     component("climate","🌡 Клімат",40),
     component("reliability","📡 Система",25),
     c.night_energy_available ? `⚡ Нічна енергія: ${fmt(c.night_energy_kwh,2)} кВт·год` : "⚡ Нічна енергія: немає базового порівняння",
     component("events","🚨 Події",15),
-    reasons.length ? `\nГоловне: ${reasons[0]}` : "",
+    reasons.length ? `\nПояснення: ${reasons[0]}` : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -453,41 +457,129 @@ export async function analyticsText(e, days) {
 export function chartUrl(config) {
   return `https://quickchart.io/chart?width=900&height=500&backgroundColor=white&version=4&c=${encodeURIComponent(JSON.stringify(config))}`;
 }
-export async function chartConfigs(e, days) {
-  const start = `${kyivDate(-(days - 1))} 00:00:00`;
+const kyivChartParts = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Europe/Kyiv",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  hourCycle: "h23",
+});
+function kyivMidnightUtc(date) {
+  const midnight = Date.parse(`${date}T00:00:00Z`),
+    parts = Object.fromEntries(
+      kyivChartParts
+        .formatToParts(new Date(midnight))
+        .filter((part) => part.type !== "literal")
+        .map((part) => [part.type, part.value]),
+    ),
+    localAsUtc = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour),
+    offset = localAsUtc - midnight;
+  return midnight - offset;
+}
+function shiftLocalDate(date, days) {
+  return new Date(Date.parse(`${date}T12:00:00Z`) + days * 86400000)
+    .toISOString()
+    .slice(0, 10);
+}
+function kyivBucketKey(timestamp, bucketHours) {
+  const parts = Object.fromEntries(
+    kyivChartParts
+      .formatToParts(new Date(`${String(timestamp).replace(" ", "T")}Z`))
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  const hour = Math.floor(+parts.hour / bucketHours) * bucketHours;
+  return `${parts.year}-${parts.month}-${parts.day}${bucketHours < 24 ? ` ${String(hour).padStart(2, "0")}:00` : ""}`;
+}
+export async function chartConfigs(e, days, { endDate = kyivDate() } = {}) {
+  const startDate = shiftLocalDate(endDate, -(days - 1)),
+    start = `${startDate} 00:00:00`,
+    intradayHours = days === 1 ? 1 : days === 7 ? 3 : 24,
+    hourly = days <= 7,
+    isCompletePeriod = endDate < kyivDate(),
+    periodLabel = days === 1
+      ? endDate === kyivDate(-1) ? "за вчора" : `за ${endDate}`
+      : days === 7 ? "за 7 днів" : "за 30 днів",
+    resolutionLabel = days === 1 ? "крок — 1 година" : days === 7 ? "крок — 3 години" : "крок — 1 день",
+    queryEnd = isCompletePeriod
+      ? new Date(kyivMidnightUtc(shiftLocalDate(endDate, 1)) - 1000).toISOString().slice(0, 19).replace("T", " ")
+      : new Date().toISOString().slice(0, 19).replace("T", " "),
+    queryStart = hourly
+      ? new Date(kyivMidnightUtc(startDate)).toISOString().slice(0, 19).replace("T", " ")
+      : start;
   const power = (
     await e.DB.prepare(
-      "SELECT substr(hour_start,1,10) d,ROUND(SUM(power_sum)/NULLIF(SUM(power_count),0),0) avg_power,ROUND(MAX(power_max),0) peak_power,ROUND(SUM(voltage_sum)/NULLIF(SUM(voltage_count),0),1) avg_v,ROUND(MIN(voltage_min),1) min_v,ROUND(MAX(voltage_max),1) max_v,COALESCE(SUM(energy_day+energy_night),0) energy,COALESCE(SUM(cost_day+cost_night),0) cost FROM power_hourly WHERE hour_start>=? GROUP BY substr(hour_start,1,10) ORDER BY d",
+      hourly
+        ? "SELECT hour_start d,power_sum,power_count,voltage_sum,voltage_count,voltage_min,voltage_max,energy_day,energy_night,cost_day,cost_night FROM power_hourly WHERE hour_start>=? AND hour_start<=? ORDER BY hour_start"
+        : "SELECT substr(hour_start,1,10) d,ROUND(SUM(power_sum)/NULLIF(SUM(power_count),0),0) avg_power,ROUND(MAX(power_max),0) peak_power,ROUND(SUM(voltage_sum)/NULLIF(SUM(voltage_count),0),1) avg_v,ROUND(MIN(voltage_min),1) min_v,ROUND(MAX(voltage_max),1) max_v,COALESCE(SUM(energy_day+energy_night),0) energy,COALESCE(SUM(cost_day+cost_night),0) cost FROM power_hourly WHERE hour_start>=? AND hour_start<=? GROUP BY substr(hour_start,1,10) ORDER BY d",
     )
-      .bind(start)
+      .bind(queryStart, queryEnd)
       .all()
   ).results;
   const climate = (
     await e.DB.prepare(
-      "SELECT substr(c.hour_start,1,10) d,c.device_id,COALESCE(d.device_name,c.device_id) name,ROUND(SUM(c.temperature_sum)/NULLIF(SUM(c.temperature_count),0),1) temp FROM climate_hourly c LEFT JOIN devices d ON d.device_id=c.device_id WHERE c.hour_start>=? GROUP BY substr(c.hour_start,1,10),c.device_id ORDER BY d",
+      hourly
+        ? "SELECT c.hour_start d,c.device_id,COALESCE(d.device_name,c.device_id) name,c.temperature_sum,c.temperature_count FROM climate_hourly c LEFT JOIN devices d ON d.device_id=c.device_id WHERE c.hour_start>=? AND c.hour_start<=? ORDER BY c.hour_start,c.device_id"
+        : "SELECT substr(c.hour_start,1,10) d,c.device_id,COALESCE(d.device_name,c.device_id) name,ROUND(SUM(c.temperature_sum)/NULLIF(SUM(c.temperature_count),0),1) temp FROM climate_hourly c LEFT JOIN devices d ON d.device_id=c.device_id WHERE c.hour_start>=? AND c.hour_start<=? GROUP BY substr(c.hour_start,1,10),c.device_id ORDER BY d",
     )
-      .bind(start)
+      .bind(queryStart, queryEnd)
       .all()
   ).results;
   if (!power.length && !climate.length) return [];
-  const labels = [
-    ...new Set([...power.map((x) => x.d), ...climate.map((x) => x.d)]),
-  ].sort();
-  const byDay = Object.fromEntries(power.map((x) => [x.d, x]));
-  const kwh = labels.map((d) => {
-    const x = byDay[d];
-    return x ? n(x.energy) : null;
-  });
-  const cost = labels.map((d, i) => {
-    const x = byDay[d];
-    return x == null || kwh[i] == null ? null : +n(x.cost).toFixed(2);
-  });
-  const temps = {};
-  for (const x of climate) (temps[x.name] ??= []).push({ d: x.d, v: x.temp });
-  const dayLabels = labels.map((x) => x.slice(5));
+  let labels, dayLabels, byDay, temps;
+  if (hourly) {
+    const end = Date.parse(`${queryEnd.replace(" ", "T")}Z`),
+      expected = new Set(),
+      cursorStart = kyivMidnightUtc(startDate);
+    for (let cursor = cursorStart; cursor <= end; cursor += 3600000) {
+      const key = kyivBucketKey(new Date(cursor).toISOString().slice(0, 19).replace("T", " "), intradayHours);
+      expected.add(key);
+    }
+    const bucket = (timestamp) => kyivBucketKey(timestamp, intradayHours);
+    labels = [...expected].sort();
+    byDay = {};
+    for (const row of power) {
+      const key = bucket(row.d);
+      if (!expected.has(key)) continue;
+      const item = (byDay[key] ??= { energy: 0, cost: 0, power_sum: 0, power_count: 0, voltage_sum: 0, voltage_count: 0, min_v: null, max_v: null });
+      item.energy += n(row.energy_day) + n(row.energy_night);
+      item.cost += n(row.cost_day) + n(row.cost_night);
+      item.power_sum += n(row.power_sum);
+      item.power_count += n(row.power_count);
+      item.voltage_sum += n(row.voltage_sum);
+      item.voltage_count += n(row.voltage_count);
+      if (row.voltage_min != null) item.min_v = item.min_v == null ? n(row.voltage_min) : Math.min(item.min_v, n(row.voltage_min));
+      if (row.voltage_max != null) item.max_v = item.max_v == null ? n(row.voltage_max) : Math.max(item.max_v, n(row.voltage_max));
+    }
+    temps = {};
+    for (const row of climate) {
+      const key = bucket(row.d);
+      if (!expected.has(key) || row.temperature_count <= 0) continue;
+      const series = (temps[row.name] ??= {}),
+        item = (series[key] ??= { sum: 0, count: 0 });
+      item.sum += n(row.temperature_sum);
+      item.count += n(row.temperature_count);
+    }
+    dayLabels = labels.map((key) => days === 1 ? key.slice(11) : `${key.slice(8, 10)}.${key.slice(5, 7)} ${key.slice(11)}`);
+  } else {
+    labels = [...new Set([...power.map((x) => x.d), ...climate.map((x) => x.d)])].sort();
+    byDay = Object.fromEntries(power.map((x) => [x.d, x]));
+    temps = {};
+    for (const x of climate) (temps[x.name] ??= {})[x.d] = { value: x.temp };
+    dayLabels = labels.map((x) => x.slice(5));
+  }
+  const kwh = labels.map((d) => byDay[d] ? n(byDay[d].energy) : null),
+    cost = labels.map((d) => byDay[d] ? +n(byDay[d].cost).toFixed(2) : null),
+    seriesValue = (item, type) => {
+      if (!item) return null;
+      if (type === "temp") return item.count ? +(item.sum / item.count).toFixed(1) : item.value ?? null;
+      if (type === "avg_v") return item.voltage_count ? +(item.voltage_sum / item.voltage_count).toFixed(1) : item.avg_v ?? null;
+      return item[type] ?? null;
+    };
   return [
     {
-      caption: `⚡ Споживання за ${days} дн.`,
+      caption: `⚡ Споживання електроенергії ${periodLabel} · ${resolutionLabel}`,
       config: {
         type: "bar",
         data: {
@@ -500,11 +592,12 @@ export async function chartConfigs(e, days) {
           plugins: {
             title: { display: true, text: "Споживання електроенергії" },
           },
+          scales: { x: { ticks: { maxTicksLimit: 12, autoSkip: true } } },
         },
       },
     },
     {
-      caption: `💰 Вартість за ${days} дн.`,
+      caption: `💰 Вартість електроенергії ${periodLabel} · ${resolutionLabel}`,
       config: {
         type: "bar",
         data: {
@@ -515,31 +608,32 @@ export async function chartConfigs(e, days) {
           plugins: {
             title: { display: true, text: "Вартість електроенергії" },
           },
+          scales: { x: { ticks: { maxTicksLimit: 12, autoSkip: true } } },
         },
       },
     },
     {
-      caption: `🔌 Напруга за ${days} дн.`,
+      caption: `🔌 Напруга ${periodLabel} · ${resolutionLabel}`,
       config: {
         type: "line",
         data: {
           labels: dayLabels,
           datasets: [
             {
-              label: "Min V",
-              data: labels.map((d) => byDay[d]?.min_v ?? null),
+              label: "Мінімум, В",
+              data: labels.map((d) => seriesValue(byDay[d], "min_v")),
               borderColor: "#ff647c",
               spanGaps: true,
             },
             {
-              label: "Avg V",
-              data: labels.map((d) => byDay[d]?.avg_v ?? null),
+              label: "Середнє, В",
+              data: labels.map((d) => seriesValue(byDay[d], "avg_v")),
               borderColor: "#35b9c7",
               spanGaps: true,
             },
             {
-              label: "Max V",
-              data: labels.map((d) => byDay[d]?.max_v ?? null),
+              label: "Максимум, В",
+              data: labels.map((d) => seriesValue(byDay[d], "max_v")),
               borderColor: "#7656d9",
               spanGaps: true,
             },
@@ -547,13 +641,14 @@ export async function chartConfigs(e, days) {
         },
         options: {
           plugins: {
-            title: { display: true, text: "Напруга min / avg / max" },
+            title: { display: true, text: "Напруга: мінімальна, середня й максимальна" },
           },
+          scales: { x: { ticks: { maxTicksLimit: 12, autoSkip: true } } },
         },
       },
     },
     {
-      caption: `🌡 Температура за ${days} дн.`,
+      caption: `🌡 Температура в кімнатах ${periodLabel} · ${resolutionLabel}`,
       config: {
         type: "line",
         data: {
@@ -562,7 +657,7 @@ export async function chartConfigs(e, days) {
             .slice(0, 6)
             .map(([name, arr], i) => ({
               label: name,
-              data: labels.map((d) => arr.find((x) => x.d === d)?.v ?? null),
+              data: labels.map((d) => seriesValue(arr[d], "temp")),
               borderColor: [
                 "#e74c3c",
                 "#3498db",
@@ -578,6 +673,7 @@ export async function chartConfigs(e, days) {
           plugins: {
             title: { display: true, text: "Температура по кімнатах" },
           },
+          scales: { x: { ticks: { maxTicksLimit: 12, autoSkip: true } } },
         },
       },
     },
@@ -587,8 +683,8 @@ export async function chart(e, id, days) {
   await send(e, id, await analyticsText(e, days), ANALYTICS);
   return sendChartPack(e, id, days);
 }
-export async function sendChartPack(e, id, days) {
-  const cs = await chartConfigs(e, days);
+export async function sendChartPack(e, id, days, options = {}) {
+  const cs = options.configs || await chartConfigs(e, days, options);
   if (!cs.length) return send(e, id, "Немає даних для графіків.");
   for (const x of cs)
     try {
