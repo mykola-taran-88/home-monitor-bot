@@ -12,6 +12,19 @@ export async function agent(e) {
     x = await latest(e),
     s = score(x);
   await maintenance(e, p);
+  const timelineCursor = await e.DB.prepare("SELECT state_value FROM agent_state WHERE state_key='timeline:last_alert_id'").first(),
+    lastTimelineAlert = n(timelineCursor?.state_value, 0),
+    freshTimelineAlerts = x.alerts.filter((a) => n(a.id) > lastTimelineAlert).sort((a, b) => n(a.id) - n(b.id));
+  if (freshTimelineAlerts.length) {
+    const latestId = Math.max(lastTimelineAlert, ...freshTimelineAlerts.map((a) => n(a.id))),
+      statements = freshTimelineAlerts.map((a) => e.DB.prepare(
+        "INSERT INTO home_timeline(category,title,message,severity) VALUES('alerts',?,?,?)",
+      ).bind(String(a.alert_message || "Подія дому").split("\n", 1)[0].slice(0, 120), a.alert_message || "", a.severity === "critical" ? "critical" : "warning"));
+    statements.push(e.DB.prepare(
+      "INSERT INTO agent_state(state_key,state_value,updated_at) VALUES('timeline:last_alert_id',?,CURRENT_TIMESTAMP) ON CONFLICT(state_key) DO UPDATE SET state_value=excluded.state_value,updated_at=CURRENT_TIMESTAMP",
+    ).bind(String(latestId)));
+    await e.DB.batch(statements);
+  }
   for (const a of x.alerts)
     if (a.severity === "critical" && a.alert_type !== "device_offline")
       await push(
@@ -81,11 +94,10 @@ export async function agent(e) {
       probability = n(h.precipitation_probability),
       wind = n(h.wind_speed),
       hazards = [];
-    if (
-      probability >= 60 &&
-      (code >= 51 && code <= 86 || code >= 95 && code <= 99)
-    )
+    const severePrecipitation = code >= 65 && code <= 67 || code >= 82 && code <= 86 || code >= 95 && code <= 99;
+    if (probability >= 60 && (code >= 51 && code <= 86 || code >= 95 && code <= 99))
       hazards.push(`опади ${probability}%`);
+    else if (severePrecipitation) hazards.push(`інтенсивні опади${probability > 0 ? ` · імовірність ${probability}%` : ""}`);
     if (wind >= 50) hazards.push(`сильний вітер ${fmt(wind, 0)} км/год`);
     if (code === 45 || code === 48) hazards.push("густий туман");
     if (code >= 56 && code <= 67) hazards.push("ожеледь або крижаний дощ");
@@ -101,8 +113,16 @@ export async function agent(e) {
   if(hazardRows.length){
     const items=hazardRows.map(x=>`• ${x.time}: ${x.hazards.join("; ")}`).join("\n"),
       fingerprint=hazardRows.map(x=>x.at).sort().join(","),
-      urgency=hazardRows.some(x=>x.hazards.some(h=>h.includes("гроза")||h.includes("ожеледь")))?"🚨":"⚠️";
-    await push(e,"weather_forecast",`hazard:${fingerprint}`,`${urgency} ПОГОДНЕ ЗАСТЕРЕЖЕННЯ · приблизно за 2 години\n${items}\nБудь ласка, врахуйте це під час планування справ і пересування.`,false,true);
+      allHazards=hazardRows.flatMap(x=>x.hazards.join(" ")) .join(" "),
+      urgency=allHazards.includes("гроза")||allHazards.includes("ожеледь")||allHazards.includes("сильний вітер")?"🚨":"⚠️",
+      advice=allHazards.includes("гроза")?"Уникайте відкритих місць і не стійте під деревами."
+        :allHazards.includes("ожеледь")||allHazards.includes("снігопад")?"Обережно пересувайтеся: можливі слизькі ділянки та погіршення видимості."
+        :allHazards.includes("сильний вітер")?"Закріпіть легкі речі надворі й обережно пересувайтеся біля дерев."
+        :allHazards.includes("туман")?"Зважайте на обмежену видимість у дорозі."
+        :allHazards.includes("спека")?"Обмежте тривале перебування на сонці та пийте воду."
+        :allHazards.includes("мороз")?"Зважайте на ризик переохолодження та обмерзання."
+        :"За можливості візьміть парасолю та перевірте умови перед виходом.";
+    await push(e,"weather_forecast",`hazard:${fingerprint}`,`${urgency} ПОГОДНЕ ЗАСТЕРЕЖЕННЯ · орієнтовно за 2 години\n${items}\n${advice}`,false,true);
   }
   const rainProb = n(x.daily[0]?.precipitation_probability),
     rainState = await e.DB.prepare(
@@ -211,10 +231,10 @@ export async function agent(e) {
     console.error("QUEUE_SEND", JSON.stringify({chat_id:group[0].chat_id,count:group.length,error:String(err?.message||err).slice(0,250)}));
   }
   const av = await e.DB.prepare(
-      "SELECT AVG(power) a FROM power_logs WHERE created_at>=datetime('now','-1 hour')",
+      "SELECT SUM(power_sum)/NULLIF(SUM(power_count),0) a FROM power_hourly WHERE hour_start>=datetime('now','-1 hour')",
     ).first(),
     base = await e.DB.prepare(
-      "SELECT AVG(power) a FROM power_logs WHERE created_at>=datetime('now','-7 days')",
+      "SELECT SUM(power_sum)/NULLIF(SUM(power_count),0) a FROM power_hourly WHERE hour_start>=datetime('now','-7 days')",
     ).first();
   if (av?.a > base?.a * 1.8) {
     await push(

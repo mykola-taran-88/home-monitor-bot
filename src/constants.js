@@ -40,12 +40,15 @@ export const fmt = (v, d = 1) =>
 export const clamp = (v) => Math.max(0, Math.min(100, Math.round(v)));
 export const age = (v) =>
   v
-    ? Math.max(
-        0,
-        Math.floor(
-          (Date.now() - new Date(String(v).replace(" ", "T") + "Z")) / 60000,
-        ),
-      )
+    ? (() => {
+        const value = String(v).replace(" ", "T"),
+          timestamp = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)
+            ? Date.parse(value)
+            : Date.parse(`${value}Z`);
+        return Number.isFinite(timestamp)
+          ? Math.max(0, Math.floor((Date.now() - timestamp) / 60000))
+          : null;
+      })()
     : null;
 export const kyivDateTime = (offsetMinutes = 0) => {
   const parts = Object.fromEntries(

@@ -186,6 +186,15 @@ export async function stateEvent(
   )
     .bind(key, next)
     .run();
+  if (active || prev === "active") {
+    const text = active ? onMessage : offMessage;
+    if (text) {
+      const title = String(text).split("\n", 1)[0].slice(0, 120);
+      await e.DB.prepare(
+        "INSERT INTO home_timeline(category,title,message,severity) VALUES(?,?,?,?)",
+      ).bind(cat, title, text, critical ? "critical" : active ? "warning" : "info").run();
+    }
+  }
   if (cat === "device_health" && (active || prev === "active")) {
     const groupKey=`${cat}:${active?"offline":"recovered"}`,
       item={message:active?onMessage:offMessage,source_id:stateKey},

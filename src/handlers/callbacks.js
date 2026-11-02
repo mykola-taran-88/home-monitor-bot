@@ -1,4 +1,4 @@
-import { CATS, n, fmt, age, MAIN, HOME, ANALYTICS, EVENTS, NOTIFY, SETTINGS, HELP } from "../constants.js";
+import { CATS, n, fmt, age, comfort, MAIN, HOME, ANALYTICS, EVENTS, NOTIFY, SETTINGS, HELP } from "../constants.js";
 import { latest } from "../database.js";
 import { ask } from "../ai.js";
 import { homeSummaryRich, energyText, weatherTextRich, scoreText, chart, sleepText, caretakerReport } from "../reports.js";
@@ -32,6 +32,7 @@ export async function callback(e, q) {
       e.DB.prepare("UPDATE recommendation_lifecycle SET active=0,resolved_at=CURRENT_TIMESTAMP WHERE recommendation_key=?").bind(row.recommendation_key),
       e.DB.prepare("INSERT INTO recommendation_feedback(recommendation_key,chat_id,action) VALUES(?,?,'done')").bind(row.recommendation_key,id),
     ]);
+    await e.DB.prepare("INSERT INTO home_timeline(category,title,message,severity) VALUES('recommendations','Рекомендацію виконано',?, 'info')").bind(row.recommendation_key).run();
     const view = await recommendationCenter(e, "active");
     return edit(e,id,mid,view.text,view.keyboard);
   }
@@ -77,6 +78,7 @@ export async function callback(e, q) {
         "UPDATE alerts SET resolved_at=COALESCE(resolved_at,CURRENT_TIMESTAMP) WHERE id=?",
       ).bind(aid),
     ]);
+    await e.DB.prepare("INSERT INTO home_timeline(category,title,message,severity) VALUES('alerts','Подію позначено вирішеною',?, 'info')").bind(`#${aid}`).run();
     return send(e, id, "✔️ Подію позначено вирішеною.");
   }
   if (d.startsWith("alert:snooze:")) {
@@ -176,12 +178,11 @@ export async function callback(e, q) {
       return send(
         e,
         id,
-        x.zones
-          .map(
-            (a) =>
-              `${a.is_outdoor ? "🌳" : "🏠"} ${a.device_name}: ${fmt(a.temperature)}°C · ${fmt(a.humidity, 0)}% · ${age(a.created_at) <= 15 ? "online" : "offline"}`,
-          )
-          .join("\n"),
+        ["🌡 КІМНАТНИЙ КОМФОРТ", ...x.zones.map((a) => {
+          const minutes = age(a.created_at), fresh = minutes != null && minutes <= 15,
+            comfortScore = !a.is_outdoor && a.temperature != null && a.humidity != null ? comfort(a.temperature, a.humidity) : null;
+          return `${a.is_outdoor ? "🌳 Надворі" : "🏠"} ${a.device_name || a.device_id}: ${fmt(a.temperature)}°C · ${fmt(a.humidity, 0)}%${comfortScore == null ? "" : ` · комфорт ${comfortScore}/100`} · ${fresh ? `дані ${minutes} хв тому` : `НЕСВІЖІ ДАНІ${minutes == null ? "" : ` · ${minutes} хв`}`}`;
+        })].join("\n"),
         HOME,
       );
     }

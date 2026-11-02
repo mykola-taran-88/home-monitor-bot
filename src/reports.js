@@ -52,46 +52,100 @@ export function weatherEmoji(c) {
   if (c <= 82) return "🌦";
   return "⛈";
 }
-export async function periodEnergy(e, start, end = null) {
-  const r = (
-    await e.DB.prepare(
-      end
-        ? "SELECT energy_total,tariff_zone,cost_per_kwh,created_at FROM power_logs WHERE created_at>=? AND created_at<? ORDER BY id"
-        : "SELECT energy_total,tariff_zone,cost_per_kwh,created_at FROM power_logs WHERE created_at>=? ORDER BY id",
-    )
-      .bind(...(end ? [start, end] : [start]))
-      .all()
-  ).results;
-  let day = 0,
-    night = 0,
-    cost = 0;
-  for (let i = 1; i < r.length; i++) {
-    const d = n(r[i].energy_total) - n(r[i - 1].energy_total);
-    if (!isFinite(d) || d < 0 || d > 100) continue;
-    if (r[i].tariff_zone === "night") night += d;
-    else day += d;
-    cost += d * n(r[i].cost_per_kwh);
-  }
-  return { total: day + night, day, night, cost, samples: r.length };
+function climateCoverage(zones) {
+  const indoor = zones.filter((z) => !z.is_outdoor),
+    fresh = indoor.filter((z) => z.temperature != null && z.humidity != null && age(z.created_at) != null && age(z.created_at) <= 15).length;
+  return { expected: indoor.length, fresh, percent: indoor.length ? Math.round(fresh / indoor.length * 100) : null };
 }
+export async function periodEnergy(e, start, end = null) {
+  const row = await e.DB.prepare(
+    end
+      ? "SELECT COALESCE(SUM(energy_day),0) day,COALESCE(SUM(energy_night),0) night,COALESCE(SUM(cost_day+cost_night),0) cost,COALESCE(SUM(sample_count),0) samples FROM power_hourly WHERE hour_start>=? AND hour_start<?"
+      : "SELECT COALESCE(SUM(energy_day),0) day,COALESCE(SUM(energy_night),0) night,COALESCE(SUM(cost_day+cost_night),0) cost,COALESCE(SUM(sample_count),0) samples FROM power_hourly WHERE hour_start>=?",
+  )
+    .bind(...(end ? [start, end] : [start]))
+    .first();
+  const day = n(row?.day),
+    night = n(row?.night),
+    cost = n(row?.cost);
+  return { total: day + night, day, night, cost, samples: n(row?.samples) };
+}
+let energyOverviewMemo = null;
 export async function energyOverview(e) {
-  const p = now(),
-    today = await periodEnergy(e, `${p.date} 00:00:00`),
-    week = await periodEnergy(e, `${kyivDate(-6)} 00:00:00`),
-    month = await periodEnergy(e, monthStart()),
-    current = await e.DB.prepare(
-      "SELECT * FROM power_logs ORDER BY id DESC LIMIT 1",
-    ).first(),
-    peak = await e.DB.prepare(
-      "SELECT power,voltage,created_at FROM power_logs WHERE created_at>=? ORDER BY power DESC LIMIT 1",
-    )
-      .bind(`${p.date} 00:00:00`)
-      .first(),
-    days = Math.max(1, n(p.day, 1)),
-    daysInMonth = new Date(p.year, p.month, 0).getDate(),
-    forecastKwh = (month.total / days) * daysInMonth,
-    forecastCost = (month.cost / days) * daysInMonth;
-  return { current, today, week, month, peak, forecastKwh, forecastCost };
+  if (energyOverviewMemo && energyOverviewMemo.expiresAt > Date.now())
+    return energyOverviewMemo.promise;
+
+  const promise = (async () => {
+    const p = now(),
+      todayStart = `${p.date} 00:00:00`,
+      weekStart = `${kyivDate(-6)} 00:00:00`,
+      monthStartAt = monthStart(),
+      starts = [todayStart, weekStart, monthStartAt],
+      from = starts.reduce((a, b) => (a < b ? a : b)),
+      [rows, current, peak] = await Promise.all([
+        e.DB.prepare(
+          "SELECT substr(hour_start,1,10) day, SUM(energy_day) energy_day, SUM(energy_night) energy_night, SUM(cost_day) cost_day, SUM(cost_night) cost_night, SUM(sample_count) sample_count, SUM(CASE WHEN sample_count>0 THEN 1 ELSE 0 END) observed_hours FROM power_hourly WHERE hour_start>=? GROUP BY substr(hour_start,1,10) ORDER BY day",
+        )
+          .bind(from)
+          .all(),
+        e.DB.prepare("SELECT * FROM power_logs ORDER BY id DESC LIMIT 1").first(),
+        e.DB.prepare(
+          "SELECT power_max AS power,power_peak_voltage AS voltage,power_peak_at AS created_at FROM power_hourly WHERE hour_start>=? ORDER BY power_max DESC LIMIT 1",
+        )
+          .bind(todayStart)
+          .first(),
+      ]),
+      periods = [todayStart, weekStart, monthStartAt].map((start) => ({
+        start,
+        day: 0,
+        night: 0,
+        cost: 0,
+        samples: 0,
+      })),
+      powerRows = rows.results;
+
+    for (const row of powerRows) {
+      for (const period of periods) {
+        if (`${row.day} 00:00:00` < period.start) continue;
+        period.samples += n(row.sample_count);
+        period.day += n(row.energy_day);
+        period.night += n(row.energy_night);
+        period.cost += n(row.cost_day) + n(row.cost_night);
+      }
+    }
+
+    const [today, week, month] = periods.map((period) => ({
+        total: period.day + period.night,
+        day: period.day,
+        night: period.night,
+        cost: period.cost,
+        samples: period.samples,
+      })),
+      days = Math.max(1, n(p.day, 1)),
+      daysInMonth = new Date(p.year, p.month, 0).getDate(),
+      forecastKwh = (month.total / days) * daysInMonth,
+      forecastCost = (month.cost / days) * daysInMonth,
+      observedHours = powerRows.reduce((sum, row) => sum + n(row.observed_hours), 0),
+      elapsedHours = Math.max(1, Math.min(days * 24, (days - 1) * 24 + p.hour + 1)),
+      hourCoverage = Math.min(100, Math.round(observedHours / elapsedHours * 100)),
+      forecastConfidence = days < 7 ? "низька · мало історії" : hourCoverage >= 80 && days >= 20 ? "висока" : hourCoverage >= 50 ? "середня" : "низька · є пропуски",
+      dailyCosts = powerRows.filter((row) => n(row.sample_count) > 0).map((row) => n(row.cost_day) + n(row.cost_night)),
+      dailyMean = dailyCosts.length ? dailyCosts.reduce((sum, value) => sum + value, 0) / dailyCosts.length : 0,
+      dailyStdDev = dailyCosts.length > 1 ? Math.sqrt(dailyCosts.reduce((sum, value) => sum + (value - dailyMean) ** 2, 0) / dailyCosts.length) : 0,
+      remainingDays = Math.max(0, daysInMonth - days),
+      dailyUncertainty = days < 7 ? Math.max(dailyMean * 0.5, dailyStdDev) : Math.max(dailyMean * 0.1, dailyStdDev * 0.5),
+      forecastLow = Math.max(0, forecastCost - dailyUncertainty * remainingDays),
+      forecastHigh = forecastCost + dailyUncertainty * remainingDays;
+    return { current, today, week, month, peak, forecastKwh, forecastCost, forecastLow, forecastHigh, forecastConfidence, hourCoverage, observedHours, elapsedHours };
+  })();
+
+  energyOverviewMemo = { expiresAt: Date.now() + 30_000, promise };
+  try {
+    return await promise;
+  } catch (error) {
+    if (energyOverviewMemo?.promise === promise) energyOverviewMemo = null;
+    throw error;
+  }
 }
 export async function energyText(e) {
   const x = await energyOverview(e);
@@ -105,6 +159,9 @@ export async function energyText(e) {
     `📅 Сьогодні: ${fmt(x.today.total, 3)} кВт·год · ${fmt(x.today.cost, 2)} грн`,
     `📆 7 днів: ${fmt(x.week.total, 3)} кВт·год · ${fmt(x.week.cost, 2)} грн`,
     `🗓 Цей місяць: ${fmt(x.month.total, 3)} кВт·год · ${fmt(x.month.cost, 2)} грн`,
+    `📊 Прогноз: ${fmt(x.forecastCost, 0)} грн · орієнтир ${fmt(x.forecastLow, 0)}–${fmt(x.forecastHigh, 0)} грн`,
+    `Впевненість: ${x.forecastConfidence} · проєкція за середнім фактом на день`,
+    `Середнє за день: ${fmt(x.month.cost / Math.max(1, now().day), 2)} грн · дані є за ${x.observedHours} з ${x.elapsedHours} год`,
     `🌙 День / ніч: ${fmt(x.month.day, 3)} / ${fmt(x.month.night, 3)} кВт·год`,
     "",
     `📈 Пік сьогодні: ${fmt(x.peak?.power, 0)} Вт${x.peak?.created_at ? ` о ${String(x.peak.created_at).slice(11, 16)}` : ""}`,
@@ -173,18 +230,18 @@ export async function weatherForecast48hText(e) {
       "SELECT * FROM weather_hourly WHERE forecast_time>=? AND forecast_time<=? ORDER BY forecast_time ASC",
     ).bind(from, to).all()
   ).results;
-  if (!rows.length) return "🌦 ПРОГНОЗ ПОГОДИ НА 24 ГОДИНИ\nНемає актуальних погодинних даних.";
+  if (!rows.length) return "🌦 ПРОГНОЗ ПОГОДИ НА 27 ГОДИН\nНемає актуальних погодинних даних.";
   const groups = {};
   for (const h of rows) {
     const date = String(h.forecast_time || "").slice(0, 10);
     (groups[date] ??= []).push(h);
   }
-  const lines = ["🌦 ПРОГНОЗ ПОГОДИ НА НАСТУПНІ 24 ГОДИНИ", "Крок прогнозу — 3 години."];
+  const lines = ["🌦 ПРОГНОЗ ПОГОДИ НА НАСТУПНІ 27 ГОДИН", "Крок прогнозу — 3 години."];
   for (const [date, items] of Object.entries(groups)) {
     lines.push("", `📅 ${forecastDayLabel(date)}`);
     for (const h of items)
       lines.push(
-        `${String(h.forecast_time).slice(11, 16)} ${weatherEmoji(h.weather_code)} ${fmt(h.temperature)} °C · дощ ${fmt(h.precipitation_probability, 0)}%`,
+        `${String(h.forecast_time).slice(11, 16)} ${weatherEmoji(h.weather_code)} ${fmt(h.temperature)} °C · дощ ${fmt(h.precipitation_probability, 0)}%${n(h.wind_speed) >= 50 ? ` · вітер ${fmt(h.wind_speed, 0)} км/год` : ""}`,
       );
   }
   return lines.join("\n");
@@ -192,6 +249,7 @@ export async function weatherForecast48hText(e) {
 export async function scoreText(e) {
   const x = await latest(e),
     s = score(x),
+    coverage = climateCoverage(x.zones),
     indoor = x.zones.filter((z) => !z.is_outdoor && z.temperature != null),
     offline = x.zones.filter(
       (z) => age(z.created_at) > 15 || age(z.created_at) == null,
@@ -222,7 +280,8 @@ export async function scoreText(e) {
     `Загальна оцінка: ${s.overall}/100`,
     `Клімат: ${s.comfort == null ? "немає достатніх даних" : `${s.comfort}/100`}`,
     `Стан системи: ${s.health}/100`,
-    `Впевненість: ${s.confidence}%`,
+    `Впевненість оцінки: ${s.confidence}%`,
+    `Свіжі кліматичні дані: ${coverage.percent == null ? "немає кімнатних датчиків" : `${coverage.fresh}/${coverage.expected} датчиків · ${coverage.percent}%`}`,
     "",
     "Що вплинуло на оцінку:",
     ...(s.deductions.length
@@ -253,13 +312,22 @@ export async function homeSummaryRich(e) {
     avg = z.length
       ? z.reduce((q, a) => q + n(a.temperature), 0) / z.length
       : null;
+  const roomLines = z.slice(0, 4).map((room) => {
+    const minutes = age(room.created_at), fresh = minutes != null && minutes <= 15,
+      roomComfort = room.humidity == null ? null : comfort(room.temperature, room.humidity);
+    return `${roomComfort != null && roomComfort < 65 ? "🟠" : "🌡"} ${room.device_name || room.device_id}: ${fmt(room.temperature)}°C · ${fmt(room.humidity, 0)}% · комфорт ${roomComfort == null ? "—" : `${roomComfort}/100`} · ${fresh ? `дані ${minutes} хв тому` : `несвіжі дані${minutes == null ? "" : ` · ${minutes} хв`}`}`;
+  });
+  const coverage = climateCoverage(x.zones);
   return [
     "🏠 ЗВЕДЕННЯ ДОМУ",
     `📊 Home Score: ${s.overall}/100`,
     `🌡 Вдома: ${fmt(avg)} °C`,
-    `⚡ Зараз: ${fmt(x.power?.power, 0)} Вт · ${fmt(x.power?.voltage, 1)} В`,
+    `📡 Свіжі кліматичні дані: ${coverage.percent == null ? "немає кімнатних датчиків" : `${coverage.fresh}/${coverage.expected} · ${coverage.percent}%`}`,
+    ...roomLines,
+    `⚡ Зараз: ${fmt(x.power?.power, 0)} Вт · ${fmt(x.power?.voltage, 1)} В · ${age(x.power?.created_at) == null ? "немає часу виміру" : `дані ${age(x.power.created_at)} хв тому`}`,
     `📅 Сьогодні: ${fmt(en.today.total, 3)} кВт·год · ${fmt(en.today.cost, 2)} грн`,
     `🗓 Місяць: ${fmt(en.month.total, 3)} кВт·год · ${fmt(en.month.cost, 2)} грн`,
+    `🔮 Прогноз витрат: ${fmt(en.forecastCost, 0)} грн · орієнтир ${fmt(en.forecastLow, 0)}–${fmt(en.forecastHigh, 0)} грн · ${en.forecastConfidence}`,
     "",
     `🌦 Сьогодні: ${today ? `${fmt(today.temp_min)}…${fmt(today.temp_max)} °C · дощ ${fmt(today.precipitation_probability, 0)}%` : "—"}`,
     `🌦 Завтра: ${tomorrow ? `${fmt(tomorrow.temp_min)}…${fmt(tomorrow.temp_max)} °C · дощ ${fmt(tomorrow.precipitation_probability, 0)}%` : "—"}`,
@@ -281,6 +349,8 @@ export async function sleepText(e) {
   return [
     "🌙 НІЧНИЙ ПІДСУМОК",
     `Sleep Score дому: ${row.score ?? "—"}/100 · даних ${row.confidence}%`,
+    c.devices_total != null ? `📡 Датчики: ${c.devices_seen ?? 0}/${c.devices_total} працювали вночі` : "",
+    c.coverage != null ? `Покриття вимірювань: ${fmt(c.coverage, 0)}%` : "",
     component("climate","🌡 Клімат",40),
     component("reliability","📡 Система",25),
     c.night_energy_available ? `⚡ Нічна енергія: ${fmt(c.night_energy_kwh,2)} кВт·год` : "⚡ Нічна енергія: немає базового порівняння",
@@ -291,11 +361,18 @@ export async function sleepText(e) {
 
 async function caretakerFacts(e) {
   const x=await latest(e), s=score(x), en=await energyOverview(e), facts=[];
+  const activeKeys=[...new Set(x.recs.map(r=>r.recommendation_key).filter(Boolean))],
+    feedbackRows=activeKeys.length ? (await e.DB.prepare(
+      `SELECT recommendation_key FROM recommendation_feedback WHERE action='not_useful' AND created_at>=datetime('now','-30 days') AND recommendation_key IN (${activeKeys.map(()=>"?").join(",")}) GROUP BY recommendation_key HAVING COUNT(DISTINCT substr(created_at,1,10))>=3`,
+    ).bind(...activeKeys).all()).results : [],
+    notUseful=new Set(feedbackRows.map(row=>row.recommendation_key));
   const add=(f)=>facts.push({...f,numeric_evidence:f.numeric_evidence??[...String(`${f.title} ${f.body}`).matchAll(/-?\d+(?:[.,]\d+)?/g)].map(m=>m[0])});
   for(const a of x.alerts.filter(a=>["critical","warning"].includes(a.severity)))
     add({id:`alert:${a.id}`,source_type:"alert",source_id:String(a.id),severity:a.severity,timestamp:a.created_at,numeric_evidence:{value:a.alert_value,threshold:a.alert_threshold},title:a.alert_message,body:a.alert_message,suggested_action:"Перевірити активну подію."});
-  for(const r of x.recs)
+  for(const r of x.recs) {
+    if(notUseful.has(r.recommendation_key) && ["low","info"].includes(r.priority)) continue;
     add({id:`recommendation:${r.recommendation_key||r.id}`,source_type:"recommendation",source_id:String(r.recommendation_key||r.id),severity:r.priority==="critical"?"critical":r.priority==="high"?"high":r.priority==="medium"?"medium":"info",timestamp:r.last_seen_at||r.created_at,numeric_evidence:{value:r.recommendation_key==="bill"?r.metadata_json:null},title:r.title,body:r.message,suggested_action:r.action||""});
+  }
   for(const d of s.deductions)
     add({id:`score:${d.code}`,source_type:"home_score",source_id:d.code,severity:"warning",timestamp:new Date().toISOString(),numeric_evidence:d.evidence,title:d.label,body:`Home Score ${s.overall}/100. ${d.label}.`,suggested_action:"Переглянути показники дому."});
   const sleep=await e.DB.prepare("SELECT * FROM house_sleep_scores ORDER BY sleep_date DESC LIMIT 1").first();
@@ -305,7 +382,7 @@ async function caretakerFacts(e) {
   if(daily&&(n(daily.precipitation_probability)>=70||[45,48,65,75,82,86,95,96,99].includes(n(daily.weather_code))))
     add({id:`weather:${daily.forecast_date}`,source_type:"weather",source_id:String(daily.forecast_date),severity:"high",timestamp:daily.forecast_date,numeric_evidence:{precipitation_probability:n(daily.precipitation_probability),weather_code:n(daily.weather_code)},title:"Погодні умови потребують уваги",body:`Опади ${fmt(daily.precipitation_probability,0)}% · ${String(daily.forecast_date).slice(0,10)}.`,suggested_action:"Перевірити прогноз перед виходом."});
   if(en.month.samples>1)
-    add({id:`energy:${now().date}`,source_type:"energy",source_id:now().date,severity:"info",timestamp:new Date().toISOString(),numeric_evidence:{month_kwh:en.month.total,month_cost:en.month.cost,forecast_cost:en.forecastCost},title:"Енергія та прогноз рахунку",body:`Місяць: ${fmt(en.month.total,1)} кВт·год · ${fmt(en.month.cost,0)} грн. Прогноз: ${fmt(en.forecastCost,0)} грн.`,suggested_action:"Переглянути споживання день/ніч."});
+    add({id:`energy:${now().date}`,source_type:"energy",source_id:now().date,severity:"info",timestamp:new Date().toISOString(),numeric_evidence:{month_kwh:en.month.total,month_cost:en.month.cost,forecast_cost:en.forecastCost,confidence:en.forecastConfidence,observed_hours:en.observedHours},title:"Енергія та прогноз рахунку",body:`Місяць: ${fmt(en.month.total,1)} кВт·год · ${fmt(en.month.cost,0)} грн. Прогноз: ${fmt(en.forecastCost,0)} грн (${en.forecastConfidence}).`,suggested_action:"Переглянути споживання день/ніч."});
   const unique=new Map(); for(const f of facts) if(!unique.has(f.id)) unique.set(f.id,f);
   return prioritizeFacts([...unique.values()],30);
 }
@@ -341,23 +418,25 @@ export async function smartMorningDigest(e) {
     lines=[issueCount?`⚠️ Потрібна увага до ${issueCount} речей`:"✅ Усе добре","\n🔎 Головне"];
   for(const f of facts)lines.push(`• ${f.title}${f.body&&f.body!==f.title?`: ${f.body}`:""}`);
   lines.push(`\n📊 Home Score: ${s.overall}/100 · впевненість ${s.confidence}%`);
+  const climateData=climateCoverage(x.zones);
+  lines.push(`📡 Свіжі датчики: ${climateData.percent==null?"немає":`${climateData.fresh}/${climateData.expected} (${climateData.percent}%)`}`);
   if(s.deductions.length)lines.push(`Причини: ${s.deductions.slice(0,2).map(d=>d.label).join("; ")}`);
   if(sleep)lines.push(`\n🌙 Sleep Score: ${sleep.score??"—"}/100 · даних ${sleep.confidence}%`);
   lines.push(`\n🌦 Погода: ${today?`${fmt(today.temp_min)}…${fmt(today.temp_max)} °C · опади ${fmt(today.precipitation_probability,0)}%`:"даних немає"}`);
   lines.push(`⚡ Вчора: ${fmt(yEnergy.total,2)} кВт·год · місяць: ${fmt(en.month.total,1)} кВт·год / ${fmt(en.month.cost,0)} грн`);
-  const bill=x.recs.find(r=>r.recommendation_key==="bill"); if(bill)lines.push(`💰 ${bill.message.split("\n")[0]}`);
+  const bill=x.recs.find(r=>r.recommendation_key==="bill"); if(bill)lines.push(`💰 ${bill.message.split("\n")[0]} · орієнтир ${fmt(en.forecastLow,0)}–${fmt(en.forecastHigh,0)} грн · ${en.forecastConfidence}`);
   return {text:lines.join("\n").slice(0,1500),keyboard:{inline_keyboard:[[{text:"📋 Деталі",callback_data:"a:home"},{text:"🧠 Caretaker",callback_data:"m:caretaker"}],[{text:"🌙 Ніч",callback_data:"a:night"},{text:"⚡ Енергія",callback_data:"a:energy"},{text:"🚨 Події",callback_data:"m:events"}]]}};
 }
 export async function analyticsText(e, days) {
   const start = `${kyivDate(-(days - 1))} 00:00:00`,
     en = await periodEnergy(e, start),
     r = await e.DB.prepare(
-      "SELECT ROUND(AVG(power),1) avg_power,ROUND(MAX(power),1) peak_power,ROUND(AVG(voltage),1) avg_voltage,ROUND(MIN(voltage),1) min_voltage,ROUND(MAX(voltage),1) max_voltage FROM power_logs WHERE created_at>=?",
+      "SELECT ROUND(SUM(power_sum)/NULLIF(SUM(power_count),0),1) avg_power,ROUND(MAX(power_max),1) peak_power,ROUND(SUM(voltage_sum)/NULLIF(SUM(voltage_count),0),1) avg_voltage,ROUND(MIN(voltage_min),1) min_voltage,ROUND(MAX(voltage_max),1) max_voltage FROM power_hourly WHERE hour_start>=?",
     )
       .bind(start)
       .first(),
     t = await e.DB.prepare(
-      "SELECT ROUND(AVG(temperature),1) avg_temp,ROUND(MIN(temperature),1) min_temp,ROUND(MAX(temperature),1) max_temp FROM climate_logs WHERE created_at>=?",
+      "SELECT ROUND(SUM(temperature_sum)/NULLIF(SUM(temperature_count),0),1) avg_temp,ROUND(MIN(temperature_min),1) min_temp,ROUND(MAX(temperature_max),1) max_temp FROM climate_hourly WHERE hour_start>=?",
     )
       .bind(start)
       .first();
@@ -378,14 +457,14 @@ export async function chartConfigs(e, days) {
   const start = `${kyivDate(-(days - 1))} 00:00:00`;
   const power = (
     await e.DB.prepare(
-      "SELECT substr(created_at,1,10) d,ROUND(AVG(power),0) avg_power,ROUND(MAX(power),0) peak_power,ROUND(AVG(voltage),1) avg_v,ROUND(MIN(voltage),1) min_v,ROUND(MAX(voltage),1) max_v,MIN(energy_total) e0,MAX(energy_total) e1,ROUND(AVG(cost_per_kwh),3) tariff FROM power_logs WHERE created_at>=? GROUP BY substr(created_at,1,10) ORDER BY d",
+      "SELECT substr(hour_start,1,10) d,ROUND(SUM(power_sum)/NULLIF(SUM(power_count),0),0) avg_power,ROUND(MAX(power_max),0) peak_power,ROUND(SUM(voltage_sum)/NULLIF(SUM(voltage_count),0),1) avg_v,ROUND(MIN(voltage_min),1) min_v,ROUND(MAX(voltage_max),1) max_v,COALESCE(SUM(energy_day+energy_night),0) energy,COALESCE(SUM(cost_day+cost_night),0) cost FROM power_hourly WHERE hour_start>=? GROUP BY substr(hour_start,1,10) ORDER BY d",
     )
       .bind(start)
       .all()
   ).results;
   const climate = (
     await e.DB.prepare(
-      "SELECT substr(c.created_at,1,10) d,c.device_id,COALESCE(d.device_name,c.device_id) name,ROUND(AVG(c.temperature),1) temp FROM climate_logs c LEFT JOIN devices d ON d.device_id=c.device_id WHERE c.created_at>=? GROUP BY substr(c.created_at,1,10),c.device_id ORDER BY d",
+      "SELECT substr(c.hour_start,1,10) d,c.device_id,COALESCE(d.device_name,c.device_id) name,ROUND(SUM(c.temperature_sum)/NULLIF(SUM(c.temperature_count),0),1) temp FROM climate_hourly c LEFT JOIN devices d ON d.device_id=c.device_id WHERE c.hour_start>=? GROUP BY substr(c.hour_start,1,10),c.device_id ORDER BY d",
     )
       .bind(start)
       .all()
@@ -397,13 +476,11 @@ export async function chartConfigs(e, days) {
   const byDay = Object.fromEntries(power.map((x) => [x.d, x]));
   const kwh = labels.map((d) => {
     const x = byDay[d];
-    return x ? Math.max(0, n(x.e1) - n(x.e0)) : null;
+    return x ? n(x.energy) : null;
   });
   const cost = labels.map((d, i) => {
     const x = byDay[d];
-    return x == null || kwh[i] == null
-      ? null
-      : +(kwh[i] * n(x.tariff)).toFixed(2);
+    return x == null || kwh[i] == null ? null : +n(x.cost).toFixed(2);
   });
   const temps = {};
   for (const x of climate) (temps[x.name] ??= []).push({ d: x.d, v: x.temp });

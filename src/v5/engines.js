@@ -3,12 +3,14 @@ import { age, clamp, comfort, n } from "../constants.js";
 export function explainScore(x, timeoutMinutes = 15) {
   const indoor = (x.zones || []).filter((z) => !z.is_outdoor && z.temperature != null && z.humidity != null),
     climate = indoor.length ? Math.round(indoor.reduce((sum,z)=>sum+comfort(z.temperature,z.humidity,z.device_id),0)/indoor.length) : null,
+    expectedIndoor = (x.zones || []).filter((z) => !z.is_outdoor),
+    freshIndoor = expectedIndoor.filter((z) => z.temperature != null && z.humidity != null && age(z.created_at) != null && age(z.created_at) <= timeoutMinutes).length,
     offline = (x.zones || []).filter((z)=>age(z.created_at)==null||age(z.created_at)>timeoutMinutes).length,
     alerts = x.alerts || [], critical = alerts.filter(a=>a.severity==="critical").length,
     healthPenalty = offline*15+critical*20+alerts.length*3,
     health = clamp(100-healthPenalty),
     overall = clamp(Math.round((climate ?? health)*0.65+health*0.35)),
-    confidence = climate==null ? 35 : 100,
+    confidence = climate==null ? 35 : expectedIndoor.length ? Math.round(freshIndoor / expectedIndoor.length * 100) : 35,
     components = [
       ...(climate==null ? [] : [{ code:"climate",label:"Клімат",score:climate,weight:65,points:+(climate*.65).toFixed(2) }]),
       { code:"system",label:"Стан системи",score:health,weight:climate==null?100:35,points:+(health*(climate==null?1:.35)).toFixed(2) },

@@ -58,6 +58,8 @@ The bot and API use the same D1 database. Do not create a new database for the b
 
 The v5 bot code depends on tables created by `../home-monitor-api/migrations/0001_home_monitor_v5.sql`. Back up the shared D1 database before applying it. The migration adds scheduler state, recommendation lifecycle and feedback, buffered events, climate anomaly state, caretaker runs, and nightly sleep scores. It also retires the `rain_window`, `home_score`, and `ventilation` notification overrides/settings as specified by v5. On an empty D1 it bootstraps settings and notification configuration; the existing API continues to own its telemetry/core tables.
 
+This bot version also reads the hourly rollups and peak metadata from API migrations `0005_telemetry_hourly_rollups.sql`, `0006_power_hourly_voltage_extremes.sql`, and `0007_power_hourly_peak_metadata.sql`. Apply these migrations to the shared D1 before deploying this bot version; do not run them against production unless explicitly approved.
+
 Run the migration against a local/preview D1 first:
 
 ```sh
@@ -76,5 +78,9 @@ Rollback: deploy the previous API and bot Worker versions from Cloudflare. The m
 - Notification quiet-hours queue items are due at the channel's configured quiet end. Event and scheduled-job outcomes can be inspected in Telegram → Diagnostics.
 - Recommendation lifecycle, Sleep Score, and caretaker reports require the shared D1 migration. The Home Score and Sleep Score remain on-demand/menu or digest content, not independent push categories.
 - Configure the v5 defaults in the API admin settings page. Current defaults are in the migration SQL; no new Worker secrets are introduced.
+- Bot energy summaries read daily aggregates from `power_hourly` (at most one row per observed day for a month view), not the raw `power_logs` history. Long-range climate analytics and charts use `climate_hourly`; room summaries use the latest sample per configured device. Keep reports bounded to aggregates/latest samples so scheduled runs do not scan telemetry history.
+- `home_timeline` records state transitions and completed recommendations, rather than writing a heartbeat row every cron run. The timeline menu reads only the newest 20 entries.
+- Climate summaries distinguish fresh readings (15 minutes or less) from stale readings. Bill projections show the observed-hour coverage and are explicitly marked low confidence during the first six days of a month.
+- The AI response is instructed to identify stale or incomplete evidence. Caretaker deprioritizes low-priority recommendations after “not useful” feedback on three distinct days within 30 days; critical and high-priority recommendations are not suppressed by that feedback.
 
 <!-- trigger v5 deploy -->
