@@ -18,6 +18,7 @@ The D1 database is configured in Wrangler. Local development uses Wrangler's loc
 - `constants.js` — categories, shared formatters, and keyboards
 - `database.js` — D1 schema, queries, and home-score helpers
 - `ai.js` — Workers AI prompts and chat history
+- `ai-context.js` — current-code explanations, safe D1 schema and bounded notification/score context for AI chat
 - `reports.js` — energy, weather, analytics, and charts
 - `notifications.js` — notification delivery, deduplication, and state changes
 - `menus.js` — Telegram menu data and channel-management helpers
@@ -83,5 +84,6 @@ Rollback: deploy the previous API and bot Worker versions from Cloudflare. The m
 - `home_timeline` records state transitions and completed recommendations, rather than writing a heartbeat row every cron run. The timeline menu reads only the newest 20 entries.
 - Climate summaries distinguish fresh readings (15 minutes or less) from stale readings. Bill projections show the observed-hour coverage and are explicitly marked low confidence during the first six days of a month.
 - The AI response is instructed to identify stale or incomplete evidence. Caretaker deprioritizes low-priority recommendations after “not useful” feedback on three distinct days within 30 days; critical and high-priority recommendations are not suppressed by that feedback.
+- AI chat can answer questions from safe D1 tables and explain implemented reports, scores, schedules, trigger rules, channels, and capabilities. Schema metadata is cached in the Worker isolate for ten minutes. Query results are capped at 100 rows; raw `power_logs`/`climate_logs` access is capped at the latest 50 unfiltered records, while period/history questions use `power_hourly`/`climate_hourly` with a maximum 90-day range. Secret settings, authentication/admin tables, chat history, and sensitive columns are excluded; safe operational settings are filtered before they reach Workers AI.
 
 <!-- trigger v5 deploy -->
