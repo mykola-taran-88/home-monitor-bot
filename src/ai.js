@@ -415,14 +415,14 @@ export async function ask(e, id, q) {
           .replace(/;\s*$/, "")
           .trim(),
       );
-      ((params = Array.isArray(item?.params)
-        ? item.params
-        : Array.isArray(p.params) && queries.length === 1
-          ? p.params
-          : []),
-        (violation = BLOCK.test(sql)
+      const params = Array.isArray(item?.params)
+          ? item.params
+          : Array.isArray(p.params) && queries.length === 1
+            ? p.params
+            : [],
+        violation = BLOCK.test(sql)
           ? "Запит містить заборонену команду."
-          : safeSqlError(sql, params, safeTables)));
+          : safeSqlError(sql, params, safeTables);
       if (violation) {
         errors.push(violation);
         continue;
