@@ -413,6 +413,17 @@ function asksCurrentTariff(question) {
   );
 }
 
+function asksNamedTariff(question) {
+  return /тариф/i.test(question) && /(?:нічн|денн|день|ніч)/i.test(question);
+}
+
+function asksCurrentTemperature(question) {
+  return (
+    /(?:градус|температур)/i.test(question) &&
+    /(?:зараз|тепер|скільки|яка)/i.test(question)
+  );
+}
+
 function asksRecentEnergy(question) {
   return (
     /(?:скільки|обсяг|кількість|витрат\w*|спожит\w*|споживан\w*)/i.test(
@@ -584,6 +595,58 @@ async function currentTariffAnswer(e, id, question) {
   return saveTurn(e, id, question, answer);
 }
 
+async function namedTariffAnswer(e, id, question) {
+  const rows =
+      (
+        await e.DB.prepare(
+          "SELECT setting_key,setting_value FROM settings WHERE setting_key IN ('timezone','day_tariff','night_tariff','day_start','night_start') LIMIT 5",
+        ).all()
+      ).results || [],
+    values = Object.fromEntries(
+      rows.map((row) => [row.setting_key, row.setting_value]),
+    ),
+    timezone = values.timezone || "Europe/Kyiv",
+    dayStart = values.day_start || "07:00",
+    nightStart = values.night_start || "23:00",
+    askedNight = /(?:нічн|ніч)/i.test(question),
+    rate = askedNight ? values.night_tariff : values.day_tariff,
+    period = askedNight
+      ? `${nightStart}–${dayStart}`
+      : `${dayStart}–${nightStart}`,
+    label = askedNight ? "нічний" : "денний",
+    answer = `${label[0].toLocaleUpperCase("uk-UA")}${label.slice(1)} тариф: ${rate == null || rate === "" ? "ставку не налаштовано" : `${fmt(rate, 2)} грн/кВт·год`} · період ${period} (${timezone}).`;
+  return saveTurn(e, id, question, answer);
+}
+
+async function currentTemperatureAnswer(e, id, question) {
+  const current = await latest(e),
+    indoor = current.zones.filter((row) => !Boolean(row.is_outdoor)),
+    requestedRoom = indoor.filter((row) =>
+      String(question)
+        .toLowerCase()
+        .includes(String(row.device_name || row.device_id).toLowerCase()),
+    ),
+    rooms = requestedRoom.length ? requestedRoom : indoor,
+    roomLines = rooms.map((room) => {
+      const minutes = age(room.created_at),
+        freshness =
+          minutes == null
+            ? "час вимірювання невідомий"
+            : minutes < 1
+              ? "щойно"
+              : `${minutes} хв тому`;
+      return `• ${room.device_name || room.device_id}: ${fmt(room.temperature)} °C (${freshness})`;
+    }),
+    outdoor = current.weather?.temperature,
+    answer = [
+      roomLines.length
+        ? `У кімнатах:\n${roomLines.join("\n")}`
+        : "Немає доступних кімнатних вимірювань.",
+      `Надворі: ${outdoor == null ? "немає актуального вимірювання" : `${fmt(outdoor)} °C`}.`,
+    ].join("\n");
+  return saveTurn(e, id, question, answer);
+}
+
 async function recentEnergyAnswer(e, id, question) {
   const [baseline, recent] = await Promise.all([
       e.DB.prepare(
@@ -715,8 +778,10 @@ export async function ask(e, id, q) {
   if (asksRoomClimateComfort(q)) return roomClimateComfortAnswer(e, id, q);
   if (asksRoomClimateHistory(q)) return roomClimateHistoryAnswer(e, id, q);
   if (asksCurrentRoomClimate(q)) return currentRoomClimateAnswer(e, id, q);
+  if (asksCurrentTemperature(q)) return currentTemperatureAnswer(e, id, q);
   if (asksDeviceStatus(q)) return currentDeviceStatusAnswer(e, id, q);
   if (asksLatestOutdoorReading(q)) return latestOutdoorAnswer(e, id, q);
+  if (asksNamedTariff(q)) return namedTariffAnswer(e, id, q);
   if (asksCurrentTariff(q)) return currentTariffAnswer(e, id, q);
   if (asksNightEnergyComparison(q)) return compareNightEnergy(e, id, q);
   if (asksTodayEnergy(q)) return todayEnergyAnswer(e, id, q);

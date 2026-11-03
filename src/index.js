@@ -65,7 +65,16 @@ async function dashboardChat(req, env, url) {
     const answer = await ask(env, chatId, question);
     return Response.json({ answer });
   } catch (error) {
-    console.error("DASHBOARD_AI", error?.message || error);
+    const message = String(error?.message || error);
+    console.error("DASHBOARD_AI", message);
+    if (/4006|daily free allocation|neurons/i.test(message))
+      return Response.json(
+        {
+          error:
+            "Вичерпано денний безкоштовний ресурс Cloudflare Workers AI. AI-відповіді відновляться після оновлення квоти; для безперервної роботи потрібен платний план Workers AI.",
+        },
+        { status: 503 },
+      );
     return Response.json(
       { error: "AI-помічник тимчасово недоступний. Спробуйте ще раз пізніше." },
       { status: 503 },
