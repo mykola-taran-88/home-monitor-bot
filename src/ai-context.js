@@ -86,7 +86,7 @@ export function safeSqlError(sql, params, tables) {
     .replace(/\s*```$/, "")
     .replace(/;\s*$/, "")
     .trim();
-  if (query.length > 2000) return "Запит завеликий.";
+  if (query.length > 6000) return "Запит завеликий.";
   if (!/^(?:SELECT|WITH)\b/i.test(query) || /;|--|\/\*|\*\//.test(query))
     return "Кожен запит має бути окремим SELECT лише для читання.";
   if (
@@ -99,9 +99,9 @@ export function safeSqlError(sql, params, tables) {
   if (
     !resultLimit ||
     Number(resultLimit[1]) < 1 ||
-    Number(resultLimit[1]) > 100
+    Number(resultLimit[1]) > 1000
   )
-    return "Потрібен LIMIT від 1 до 100.";
+    return "LIMIT має бути додатним і не більшим за 1000 рядків.";
   if (
     /\b(?:ai_chat_history|sqlite_master|sqlite_schema|pragma_\w*)\b/i.test(
       query,
@@ -137,13 +137,13 @@ export function safeSqlError(sql, params, tables) {
     const timeBound = query.match(
       /\bcreated_at\s*>=\s*datetime\(\s*'now'\s*,\s*['"]-(\d+)\s*(hours?|days?)['"]\s*\)/i,
     );
-    if (rawRefs.length > 1 || !timeBound || Number(resultLimit[1]) > 100)
-      return "Для сирих журналів задай межу created_at не давнішу за 30 днів і LIMIT до 100. Для довгих періодів використовуй погодинні зведення.";
+    if (rawRefs.length > 1 || !timeBound)
+      return "Для сирих журналів задай межу created_at не давнішу за 90 днів. Для довгих періодів використовуй погодинні зведення.";
     const amount = Number(timeBound[1]),
       unit = timeBound[2].toLowerCase(),
       hours = unit.startsWith("day") ? amount * 24 : amount;
-    if (hours > 30 * 24)
-      return "Сирі журнали доступні максимум за 30 днів; для довших періодів використовуй погодинні зведення.";
+    if (hours > 90 * 24)
+      return "Сирі журнали доступні максимум за 90 днів; для довших періодів використовуй погодинні зведення.";
   }
   const rollupRefs = uniqueRefs.filter(
     (name) => name === "power_hourly" || name === "climate_hourly",
@@ -156,8 +156,8 @@ export function safeSqlError(sql, params, tables) {
       const amount = Number(bound[1]),
         unit = bound[2].toLowerCase(),
         hours = unit.startsWith("day") ? amount * 24 : amount;
-      if (hours > 24 * 90)
-        return "Період погодинного зведення має бути не більшим за 90 днів.";
+      if (hours > 24 * 365)
+        return "Період погодинного зведення має бути не більшим за рік.";
     } else {
       const range = query.match(
         /\bhour_start\s*>=\s*\?\s+AND\s+(?:\w+\.)?hour_start\s*<\s*\?/i,
@@ -170,13 +170,13 @@ export function safeSqlError(sql, params, tables) {
         !Number.isFinite(start) ||
         !Number.isFinite(end) ||
         end <= start ||
-        end - start > 90 * 86400_000
+        end - start > 365 * 86400_000
       )
-        return "Діапазон погодинного зведення має бути коректним і не більшим за 90 днів.";
+        return "Діапазон погодинного зведення має бути коректним і не більшим за рік.";
     }
   }
   if (
-    params.length > 10 ||
+    params.length > 50 ||
     params.some((value) => typeof value === "object" && value !== null)
   )
     return "Забагато або неприпустимі параметри.";
