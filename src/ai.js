@@ -257,7 +257,7 @@ async function compareNightEnergy(e, id, question) {
     dayStart = settings.day_start || "07:00",
     nightStart = settings.night_start || "23:00";
 
-  if (nightStart >= dayStart)
+  if (nightStart <= dayStart)
     return saveTurn(
       e,
       id,
