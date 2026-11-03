@@ -90,6 +90,88 @@ async function currentRoomClimateAnswer(e, id, question) {
   return saveTurn(e, id, question, answer);
 }
 
+function asksDeviceStatus(question) {
+  return (
+    /(?:датчик|пристр|сенсор|device)/i.test(question) &&
+    /(?:працю|стан|оновлю|offline|online|зв.?яз|всі|перевір|доступ)/i.test(
+      question,
+    )
+  );
+}
+
+async function currentDeviceStatusAnswer(e, id, question) {
+  const [deviceResult, climateResult, power, timeoutRow] = await Promise.all([
+      e.DB.prepare(
+        "SELECT device_id,device_name,device_type,is_outdoor,last_seen FROM devices WHERE enabled=1 ORDER BY display_order,id LIMIT 100",
+      ).all(),
+      e.DB.prepare(
+        "SELECT device_id,temperature,humidity,created_at FROM climate_logs WHERE device_id IN (SELECT device_id FROM devices WHERE enabled=1 AND device_type='climate') ORDER BY id DESC LIMIT 100",
+      ).all(),
+      e.DB.prepare(
+        "SELECT power,voltage,created_at FROM power_logs ORDER BY id DESC LIMIT 1",
+      ).first(),
+      e.DB.prepare(
+        "SELECT setting_value FROM settings WHERE setting_key='device_timeout_minutes' LIMIT 1",
+      ).first(),
+    ]),
+    timeout = Math.max(1, Number(timeoutRow?.setting_value) || 15),
+    climateByDevice = new Map();
+  for (const row of climateResult.results || [])
+    if (!climateByDevice.has(row.device_id))
+      climateByDevice.set(row.device_id, row);
+
+  const items = (deviceResult.results || []).map((device) => {
+    const isClimate = device.device_type === "climate",
+      isPower = ["power", "energy", "pzem"].includes(device.device_type),
+      climate = climateByDevice.get(device.device_id),
+      lastSeen = isClimate
+        ? climate?.created_at || null
+        : isPower
+          ? power?.created_at || null
+          : device.last_seen || null,
+      ageMinutes = age(lastSeen),
+      status =
+        ageMinutes == null
+          ? "немає даних"
+          : ageMinutes <= timeout
+            ? "онлайн"
+            : ageMinutes <= timeout * 2
+              ? "затримка даних"
+              : "offline",
+      readings = isClimate
+        ? [
+            climate?.temperature == null
+              ? null
+              : `${fmt(climate.temperature)} °C`,
+            climate?.humidity == null ? null : `${fmt(climate.humidity)}%`,
+          ]
+            .filter(Boolean)
+            .join(" · ")
+        : isPower
+          ? [
+              power?.power == null ? null : `${fmt(power.power)} Вт`,
+              power?.voltage == null ? null : `${fmt(power.voltage)} В`,
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          : "";
+    const freshness =
+      ageMinutes == null
+        ? ""
+        : ageMinutes < 1
+          ? " · щойно"
+          : ageMinutes < 60
+            ? ` · ${ageMinutes} хв тому`
+            : ` · ${Math.floor(ageMinutes / 60)} год${ageMinutes % 60 ? ` ${ageMinutes % 60} хв` : ""} тому`;
+    return `• ${device.device_name || device.device_id}: ${status}${freshness}${readings ? ` · ${readings}` : ""}`;
+  });
+  const online = items.filter((item) => item.includes(": онлайн")).length,
+    answer = items.length
+      ? `Активні пристрої: ${online}/${items.length} онлайн (тайм-аут ${timeout} хв).\n${items.join("\n")}`
+      : "У базі немає активних пристроїв.";
+  return saveTurn(e, id, question, answer);
+}
+
 function asksCurrentTariff(question) {
   return (
     /тариф/i.test(question) &&
@@ -259,6 +341,7 @@ export async function ask(e, id, q) {
   if (isCapabilitiesQuestion(q))
     return saveTurn(e, id, q, capabilitiesAnswer());
   if (asksCurrentRoomClimate(q)) return currentRoomClimateAnswer(e, id, q);
+  if (asksDeviceStatus(q)) return currentDeviceStatusAnswer(e, id, q);
   if (asksLatestOutdoorReading(q)) return latestOutdoorAnswer(e, id, q);
   if (asksCurrentTariff(q)) return currentTariffAnswer(e, id, q);
   if (asksRecentEnergy(q)) return recentEnergyAnswer(e, id, q);
