@@ -23,7 +23,10 @@ async function dashboardChat(req, env, url) {
     .join("");
   const chatId = `web:${ipHash.slice(0, 24)}:${url.searchParams.get("conversation") || ""}`;
   if (!/^web:[a-f0-9]{24}:[a-f0-9-]{36}$/.test(chatId))
-    return Response.json({ error: "Некоректний ідентифікатор чату." }, { status: 400 });
+    return Response.json(
+      { error: "Некоректний ідентифікатор чату." },
+      { status: 400 },
+    );
 
   if (url.pathname === "/internal/web-chat/clear" && req.method === "POST") {
     await env.DB.prepare("DELETE FROM ai_chat_history WHERE chat_id=?")
@@ -37,7 +40,10 @@ async function dashboardChat(req, env, url) {
   const input = await req.json().catch(() => ({}));
   const question = String(input.message || "").trim();
   if (!question || question.length > 1200)
-    return Response.json({ error: "Повідомлення має містити до 1200 символів." }, { status: 400 });
+    return Response.json(
+      { error: "Повідомлення має містити до 1200 символів." },
+      { status: 400 },
+    );
 
   await env.DB.prepare(
     "CREATE TABLE IF NOT EXISTS dashboard_ai_limits(ip_hash TEXT PRIMARY KEY,minute_bucket INTEGER NOT NULL,minute_count INTEGER NOT NULL,day_bucket TEXT NOT NULL,day_count INTEGER NOT NULL)",
@@ -49,7 +55,7 @@ async function dashboardChat(req, env, url) {
   )
     .bind(ipHash, minuteBucket, dayBucket)
     .first();
-  if (Number(limit?.minute_count) > 8 || Number(limit?.day_count) > 40)
+  if (Number(limit?.minute_count) > 24 || Number(limit?.day_count) > 200)
     return Response.json(
       { error: "Забагато запитів. Спробуйте трохи пізніше." },
       { status: 429 },

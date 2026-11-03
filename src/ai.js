@@ -1,5 +1,6 @@
 import { MODELS, BLOCK, fmt, age } from "./constants.js";
 import { latest, now } from "./database.js";
+import { energyOverview, scoreText, weatherTextRich } from "./reports.js";
 import {
   BOT_LOGIC,
   capabilitiesAnswer,
@@ -61,6 +62,232 @@ function asksCurrentRoomClimate(question) {
     /(?:кімнат|приміщен)/i.test(question) &&
     /(?:зараз|поточн|тепер|які|покажи)/i.test(question)
   );
+}
+
+function asksRoomClimateComfort(question) {
+  return (
+    /(?:кімнат|приміщен)/i.test(question) &&
+    /(?:комфорт|норм|меж|виходить)/i.test(question) &&
+    /(?:температур|вологіст)/i.test(question)
+  );
+}
+
+function asksRoomClimateHistory(question) {
+  return (
+    /(?:кімнат|кімнат[іи])/i.test(question) &&
+    /(?:температур|вологіст)/i.test(question) &&
+    /(?:мінімальн|середн|максимальн)/i.test(question) &&
+    /(?:24\s*(?:год|годин)|доба)/i.test(question)
+  );
+}
+
+function asksTodayEnergy(question) {
+  return (
+    /(?:сьогодн|за день)/i.test(question) &&
+    /(?:енерг|електрик|споживан|кВт)/i.test(question) &&
+    /(?:скільки|покажи|витрат)/i.test(question)
+  );
+}
+
+function asksCurrentVoltage(question) {
+  return (
+    /напруг/i.test(question) && /(?:зараз|поточн|тепер|яка)/i.test(question)
+  );
+}
+
+function asksVoltageHistory(question) {
+  return (
+    /напруг/i.test(question) &&
+    /(?:мінімальн|середн|максимальн)/i.test(question) &&
+    /(?:24\s*(?:год|годин)|доба)/i.test(question)
+  );
+}
+
+function asksHomeScoreExplanation(question) {
+  return (
+    /home\s*score/i.test(question) &&
+    /(?:поясн|оцінк|причин|списан)/i.test(question)
+  );
+}
+
+function asksWeatherForecast(question) {
+  return (
+    /(?:прогноз|прогнозу|прогнозуються)/i.test(question) &&
+    /(?:погод|температур|опад)/i.test(question)
+  );
+}
+
+function asksAlertRules(question) {
+  return (
+    /(?:умови|умов|спрацьов|запуска)/i.test(question) &&
+    /(?:попереджен|алерт|сигнал)/i.test(question)
+  );
+}
+
+function asksActiveAlerts(question) {
+  return (
+    /(?:активн|зараз)/i.test(question) &&
+    /(?:поді|сповіщ|алерт|уваг)/i.test(question)
+  );
+}
+
+async function activeAlertsAnswer(e, id, question) {
+  const current = await latest(e),
+    alerts = current.alerts || [],
+    recommendations = current.recs || [],
+    lines = [
+      ...alerts.map(
+        (item) =>
+          `• ${item.severity || "Подія"}: ${item.alert_message || item.alert_type || "Активний алерт"}`,
+      ),
+      ...recommendations.map(
+        (item) =>
+          `• Рекомендація: ${item.title || item.message || item.recommendation_key || "Потребує уваги"}`,
+      ),
+    ],
+    answer = lines.length
+      ? `Активні події та рекомендації (${lines.length}):\n${lines.join("\n")}`
+      : "Зараз у базі немає активних алертів або рекомендацій, що потребують уваги.";
+  return saveTurn(e, id, question, answer);
+}
+
+async function alertRulesAnswer(e, id, question) {
+  const lines = BOT_LOGIC.split("\n").filter((line) =>
+    /Тригерні сповіщення|Climate Anomaly Engine|Перед відправленням/.test(line),
+  );
+  return saveTurn(
+    e,
+    id,
+    question,
+    lines.length
+      ? `Умови спрацювання за логікою Home Monitor:\n${lines.map((line) => line.replace(/^-\s*/, "• ")).join("\n")}`
+      : "Не вдалося знайти опис правил сповіщень у довіднику логіки Home Monitor.",
+  );
+}
+
+async function roomClimateComfortAnswer(e, id, question) {
+  const [current, settingRows] = await Promise.all([
+      latest(e),
+      e.DB.prepare(
+        "SELECT setting_key,setting_value FROM settings WHERE setting_key IN ('default_temp_low','default_temp_high','default_humidity_high') LIMIT 3",
+      ).all(),
+    ]),
+    settings = Object.fromEntries(
+      (settingRows.results || []).map((row) => [
+        row.setting_key,
+        Number(row.setting_value),
+      ]),
+    ),
+    low = Number.isFinite(settings.default_temp_low)
+      ? settings.default_temp_low
+      : 18,
+    high = Number.isFinite(settings.default_temp_high)
+      ? settings.default_temp_high
+      : 28,
+    humidityHigh = Number.isFinite(settings.default_humidity_high)
+      ? settings.default_humidity_high
+      : 70,
+    rooms = current.zones.filter((row) => !Boolean(row.is_outdoor)),
+    issues = [];
+  for (const room of rooms) {
+    const reasons = [];
+    if (room.temperature != null && room.temperature < low)
+      reasons.push(`нижче ${fmt(low)} °C (${fmt(room.temperature)} °C)`);
+    if (room.temperature != null && room.temperature > high)
+      reasons.push(`вище ${fmt(high)} °C (${fmt(room.temperature)} °C)`);
+    if (room.humidity != null && room.humidity > humidityHigh)
+      reasons.push(
+        `вологість вище ${fmt(humidityHigh, 0)}% (${fmt(room.humidity, 1)}%)`,
+      );
+    if (reasons.length) {
+      const minutes = age(room.created_at),
+        freshness =
+          minutes == null
+            ? " · час оновлення невідомий"
+            : minutes > 15
+              ? ` · дані застарілі, ${minutes} хв тому`
+              : ` · оновлено ${minutes < 1 ? "щойно" : `${minutes} хв тому`}`;
+      issues.push(
+        `• ${room.device_name || room.device_id}: ${reasons.join("; ")}${freshness}`,
+      );
+    }
+  }
+  const stale = rooms.filter(
+      (room) => age(room.created_at) == null || age(room.created_at) > 15,
+    ),
+    staleNote = stale.length
+      ? ` Увага: дані застарілі або відсутні для ${stale.map((room) => room.device_name || room.device_id).join(", ")}; їх поточний стан не підтверджений.`
+      : "",
+    answer = issues.length
+      ? `Поза налаштованими порогами:\n${issues.join("\n")}\nПороги: температура ${fmt(low)}–${fmt(high)} °C, вологість до ${fmt(humidityHigh, 0)}%.`
+      : `За доступними поточними показниками кімнат виходу за налаштовані пороги немає. Пороги: температура ${fmt(low)}–${fmt(high)} °C, вологість до ${fmt(humidityHigh, 0)}%.${staleNote}`;
+  return saveTurn(e, id, question, answer);
+}
+
+async function roomClimateHistoryAnswer(e, id, question) {
+  const rows =
+    (
+      await e.DB.prepare(
+        "SELECT d.device_name,h.device_id,MIN(h.temperature_min) temp_min,ROUND(SUM(h.temperature_sum)/NULLIF(SUM(h.temperature_count),0),1) temp_avg,MAX(h.temperature_max) temp_max,MIN(h.humidity_min) humidity_min,ROUND(SUM(h.humidity_sum)/NULLIF(SUM(h.humidity_count),0),1) humidity_avg,MAX(h.humidity_max) humidity_max,SUM(h.temperature_count) temp_samples,SUM(h.humidity_count) humidity_samples FROM climate_hourly h JOIN devices d ON d.device_id=h.device_id WHERE d.enabled=1 AND d.device_type='climate' AND d.is_outdoor=0 AND h.hour_start>=datetime('now','-24 hours') GROUP BY h.device_id,d.device_name ORDER BY d.display_order,d.device_name LIMIT 100",
+      ).all()
+    ).results || [];
+  const lines = rows
+    .filter((row) => Number(row.temp_samples) || Number(row.humidity_samples))
+    .map(
+      (row) =>
+        `• ${row.device_name || row.device_id}: температура ${fmt(row.temp_min)} / ${fmt(row.temp_avg)} / ${fmt(row.temp_max)} °C (мін./сер./макс.); вологість ${fmt(row.humidity_min)} / ${fmt(row.humidity_avg)} / ${fmt(row.humidity_max)}% (мін./сер./макс.)`,
+    );
+  const answer = lines.length
+    ? `За останні 24 години, окремо за кімнатами:\n${lines.join("\n")}`
+    : "За останні 24 години в погодинній історії немає кліматичних вимірювань кімнат.";
+  return saveTurn(e, id, question, answer);
+}
+
+async function todayEnergyAnswer(e, id, question) {
+  const summary = await energyOverview(e),
+    today = summary.today,
+    answer = today.samples
+      ? `Сьогодні спожито ${fmt(today.total, 3)} кВт·год: денний тариф ${fmt(today.day, 3)} кВт·год, нічний ${fmt(today.night, 3)} кВт·год. Нарахована вартість — ${fmt(today.cost, 2)} грн. Дані містять ${today.samples} вимірювань.`
+      : "За сьогодні у погодинній історії ще немає вимірювань споживання, тому суму та вартість підтвердити не можу.";
+  return saveTurn(e, id, question, answer);
+}
+
+async function currentVoltageAnswer(e, id, question) {
+  const [current, settingRows] = await Promise.all([
+      latest(e),
+      e.DB.prepare(
+        "SELECT setting_key,setting_value FROM settings WHERE setting_key IN ('voltage_low_alert','voltage_high_alert') LIMIT 2",
+      ).all(),
+    ]),
+    settings = Object.fromEntries(
+      (settingRows.results || []).map((row) => [
+        row.setting_key,
+        Number(row.setting_value),
+      ]),
+    ),
+    low = Number.isFinite(settings.voltage_low_alert)
+      ? settings.voltage_low_alert
+      : 200,
+    high = Number.isFinite(settings.voltage_high_alert)
+      ? settings.voltage_high_alert
+      : 250,
+    voltage = current.power?.voltage,
+    minutes = age(current.power?.created_at),
+    answer =
+      voltage == null
+        ? "У базі поки немає останнього вимірювання напруги."
+        : `Останнє вимірювання напруги: ${fmt(voltage, 1)} В${minutes == null ? "" : ` · ${minutes < 1 ? "щойно" : `${minutes} хв тому`}`}. Налаштований діапазон: ${fmt(low)}–${fmt(high)} В; ${voltage < low ? "нижче порогу" : voltage > high ? "вище порогу" : "у межах порогів"}.`;
+  return saveTurn(e, id, question, answer);
+}
+
+async function voltageHistoryAnswer(e, id, question) {
+  const row = await e.DB.prepare(
+    "SELECT MIN(voltage_min) min,ROUND(SUM(voltage_sum)/NULLIF(SUM(voltage_count),0),1) avg,MAX(voltage_max) max,SUM(voltage_count) samples FROM power_hourly WHERE hour_start>=datetime('now','-24 hours')",
+  ).first();
+  const answer = Number(row?.samples)
+    ? `За останні 24 години: мінімум ${fmt(row.min, 1)} В, середнє ${fmt(row.avg, 1)} В, максимум ${fmt(row.max, 1)} В (${fmt(row.samples, 0)} вимірювань).`
+    : "За останні 24 години в погодинній історії немає вимірювань напруги.";
+  return saveTurn(e, id, question, answer);
 }
 
 async function currentRoomClimateAnswer(e, id, question) {
@@ -483,11 +710,22 @@ function ensureQueryLimit(sql) {
 export async function ask(e, id, q) {
   if (isCapabilitiesQuestion(q))
     return saveTurn(e, id, q, capabilitiesAnswer());
+  if (asksActiveAlerts(q)) return activeAlertsAnswer(e, id, q);
+  if (asksAlertRules(q)) return alertRulesAnswer(e, id, q);
+  if (asksRoomClimateComfort(q)) return roomClimateComfortAnswer(e, id, q);
+  if (asksRoomClimateHistory(q)) return roomClimateHistoryAnswer(e, id, q);
   if (asksCurrentRoomClimate(q)) return currentRoomClimateAnswer(e, id, q);
   if (asksDeviceStatus(q)) return currentDeviceStatusAnswer(e, id, q);
   if (asksLatestOutdoorReading(q)) return latestOutdoorAnswer(e, id, q);
   if (asksCurrentTariff(q)) return currentTariffAnswer(e, id, q);
   if (asksNightEnergyComparison(q)) return compareNightEnergy(e, id, q);
+  if (asksTodayEnergy(q)) return todayEnergyAnswer(e, id, q);
+  if (asksCurrentVoltage(q)) return currentVoltageAnswer(e, id, q);
+  if (asksVoltageHistory(q)) return voltageHistoryAnswer(e, id, q);
+  if (asksHomeScoreExplanation(q))
+    return saveTurn(e, id, q, await scoreText(e));
+  if (asksWeatherForecast(q))
+    return saveTurn(e, id, q, await weatherTextRich(e));
   if (asksRecentEnergy(q)) return recentEnergyAnswer(e, id, q);
   const h = (
       await e.DB.prepare(
