@@ -196,6 +196,135 @@ function asksRecentEnergy(question) {
   );
 }
 
+function asksNightEnergyComparison(question) {
+  return (
+    /(?:порівн|різниц|скільки|споживан|витрат)/i.test(question) &&
+    /(?:електрик|енерг|кВт)/i.test(question) &&
+    /(?:ніч|ноч|минул|попередн)/i.test(question)
+  );
+}
+
+function shiftIsoDate(date, days) {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function wallTimeToSql(date, time, timezone) {
+  const [year, month, day] = date.split("-").map(Number),
+    [hour, minute] = time.split(":").map(Number),
+    wallTime = Date.UTC(year, month - 1, day, hour, minute),
+    parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      timeZoneName: "shortOffset",
+    }).formatToParts(new Date(wallTime)),
+    zone = parts.find((part) => part.type === "timeZoneName")?.value || "GMT+0",
+    offset = zone.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/),
+    minutes = offset
+      ? (offset[1] === "-" ? -1 : 1) *
+        (Number(offset[2]) * 60 + Number(offset[3] || 0))
+      : 0,
+    instant = new Date(wallTime - minutes * 60_000);
+  return instant.toISOString().slice(0, 19).replace("T", " ");
+}
+
+async function compareNightEnergy(e, id, question) {
+  const settingRows =
+      (
+        await e.DB.prepare(
+          "SELECT setting_key,setting_value FROM settings WHERE setting_key IN ('timezone','day_start','night_start') LIMIT 3",
+        ).all()
+      ).results || [],
+    settings = Object.fromEntries(
+      settingRows.map((row) => [row.setting_key, row.setting_value]),
+    ),
+    timezone = settings.timezone || "Europe/Kyiv",
+    nowParts = Object.fromEntries(
+      new Intl.DateTimeFormat("en-GB", {
+        timeZone: timezone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      })
+        .formatToParts(new Date())
+        .filter((part) => part.type !== "literal")
+        .map((part) => [part.type, part.value]),
+    ),
+    today = `${nowParts.year}-${nowParts.month}-${nowParts.day}`,
+    dayStart = settings.day_start || "07:00",
+    nightStart = settings.night_start || "23:00";
+
+  if (nightStart >= dayStart)
+    return saveTurn(
+      e,
+      id,
+      question,
+      `Порівняння нічного споживання недоступне: налаштований нічний тариф (${nightStart}) не переходить через північ відносно денного тарифу (${dayStart}).`,
+    );
+
+  const currentTime = `${nowParts.hour}:${nowParts.minute}`,
+    todayBeforeDayStart = currentTime < dayStart,
+    currentNightStartDate =
+      currentTime >= nightStart || todayBeforeDayStart
+        ? todayBeforeDayStart
+          ? shiftIsoDate(today, -1)
+          : today
+        : shiftIsoDate(today, -1),
+    currentNightEndDate = todayBeforeDayStart
+      ? today
+      : shiftIsoDate(currentNightStartDate, 1),
+    previousNightStartDate = shiftIsoDate(currentNightStartDate, -1),
+    previousNightEndDate = currentNightStartDate,
+    currentStart = wallTimeToSql(currentNightStartDate, nightStart, timezone),
+    currentEnd = wallTimeToSql(currentNightEndDate, dayStart, timezone),
+    previousStart = wallTimeToSql(previousNightStartDate, nightStart, timezone),
+    previousEnd = wallTimeToSql(previousNightEndDate, dayStart, timezone),
+    rows =
+      (
+        await e.DB.prepare(
+          "SELECT hour_start,energy_night,sample_count FROM power_hourly WHERE hour_start>=? AND hour_start<? ORDER BY hour_start LIMIT 1000",
+        )
+          .bind(previousStart, currentEnd)
+          .all()
+      ).results || [],
+    sumPeriod = (start, end) => {
+      const selected = rows.filter(
+        (row) => row.hour_start >= start && row.hour_start < end,
+      );
+      return {
+        kwh: selected.reduce(
+          (sum, row) => sum + Number(row.energy_night || 0),
+          0,
+        ),
+        samples: selected.reduce(
+          (sum, row) => sum + Number(row.sample_count || 0),
+          0,
+        ),
+      };
+    },
+    current = sumPeriod(currentStart, currentEnd),
+    previous = sumPeriod(previousStart, previousEnd);
+
+  if (!current.samples && !previous.samples)
+    return saveTurn(
+      e,
+      id,
+      question,
+      "У погодинній історії поки немає даних за ці дві ночі, тому порівняння неможливе.",
+    );
+  const difference = current.kwh - previous.kwh,
+    percent = previous.kwh > 0 ? (difference / previous.kwh) * 100 : null,
+    comparison =
+      percent == null
+        ? "відсоткову зміну не можна обчислити, бо за попередню ніч немає споживання"
+        : `${Math.abs(percent).toLocaleString("uk-UA", { maximumFractionDigits: 1 })}% ${percent > 0 ? "більше" : percent < 0 ? "менше" : "без змін"}`,
+    answer = `Порівняння двох останніх ночей за нічним тарифом (${timezone}):\n• ${previousNightStartDate}: ${fmt(previous.kwh, 3)} кВт·год${previous.samples ? "" : " (даних немає)"}\n• ${currentNightStartDate}: ${fmt(current.kwh, 3)} кВт·год${current.samples ? "" : " (ніч триває або даних немає)"}\nРізниця: ${difference >= 0 ? "+" : ""}${fmt(difference, 3)} кВт·год · ${comparison}.`;
+  return saveTurn(e, id, question, answer);
+}
+
 async function currentTariffAnswer(e, id, question) {
   const settings = (
       await e.DB.prepare(
@@ -358,6 +487,7 @@ export async function ask(e, id, q) {
   if (asksDeviceStatus(q)) return currentDeviceStatusAnswer(e, id, q);
   if (asksLatestOutdoorReading(q)) return latestOutdoorAnswer(e, id, q);
   if (asksCurrentTariff(q)) return currentTariffAnswer(e, id, q);
+  if (asksNightEnergyComparison(q)) return compareNightEnergy(e, id, q);
   if (asksRecentEnergy(q)) return recentEnergyAnswer(e, id, q);
   const h = (
       await e.DB.prepare(
