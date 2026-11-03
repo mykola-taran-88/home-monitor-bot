@@ -125,7 +125,7 @@ async function currentDeviceStatusAnswer(e, id, question) {
       isPower = ["power", "energy", "pzem"].includes(device.device_type),
       climate = climateByDevice.get(device.device_id),
       lastSeen = isClimate
-        ? climate?.created_at || null
+        ? climate?.created_at || device.last_seen || null
         : isPower
           ? power?.created_at || null
           : device.last_seen || null,
