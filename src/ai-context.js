@@ -88,7 +88,7 @@ export function safeSqlError(sql, params, tables) {
     .trim();
   if (query.length > 2000) return "Запит завеликий.";
   if (!/^(?:SELECT|WITH)\b/i.test(query) || /;|--|\/\*|\*\//.test(query))
-    return "Дозволений лише один SELECT.";
+    return "Кожен запит має бути окремим SELECT лише для читання.";
   if (
     /\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|UPSERT|ATTACH|DETACH|PRAGMA|VACUUM|TRIGGER|BEGIN|COMMIT|ROLLBACK)\b/i.test(
       query,
