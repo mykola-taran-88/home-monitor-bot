@@ -6,11 +6,73 @@ import { tg, send } from "./telegram.js";
 import { callback } from "./handlers/callbacks.js";
 import { message } from "./handlers/messages.js";
 import { agent } from "./jobs/agent.js";
+import { ask } from "./ai.js";
+
+async function dashboardChat(req, env, url) {
+  const expected = env.DASHBOARD_AI_INTERNAL_SECRET;
+  if (!expected || req.headers.get("X-Dashboard-AI-Secret") !== expected)
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
+
+  const ip = req.headers.get("X-Home-Monitor-Client-IP") || "unknown";
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(ip),
+  );
+  const ipHash = [...new Uint8Array(digest)]
+    .map((part) => part.toString(16).padStart(2, "0"))
+    .join("");
+  const chatId = `web:${ipHash.slice(0, 24)}:${url.searchParams.get("conversation") || ""}`;
+  if (!/^web:[a-f0-9]{24}:[a-f0-9-]{36}$/.test(chatId))
+    return Response.json({ error: "Некоректний ідентифікатор чату." }, { status: 400 });
+
+  if (url.pathname === "/internal/web-chat/clear" && req.method === "POST") {
+    await env.DB.prepare("DELETE FROM ai_chat_history WHERE chat_id=?")
+      .bind(chatId)
+      .run();
+    return Response.json({ success: true });
+  }
+  if (url.pathname !== "/internal/web-chat" || req.method !== "POST")
+    return Response.json({ error: "Not Found" }, { status: 404 });
+
+  const input = await req.json().catch(() => ({}));
+  const question = String(input.message || "").trim();
+  if (!question || question.length > 1200)
+    return Response.json({ error: "Повідомлення має містити до 1200 символів." }, { status: 400 });
+
+  await env.DB.prepare(
+    "CREATE TABLE IF NOT EXISTS dashboard_ai_limits(ip_hash TEXT PRIMARY KEY,minute_bucket INTEGER NOT NULL,minute_count INTEGER NOT NULL,day_bucket TEXT NOT NULL,day_count INTEGER NOT NULL)",
+  ).run();
+  const minuteBucket = Math.floor(Date.now() / 60000);
+  const dayBucket = new Date().toISOString().slice(0, 10);
+  const limit = await env.DB.prepare(
+    "INSERT INTO dashboard_ai_limits(ip_hash,minute_bucket,minute_count,day_bucket,day_count) VALUES(?,?,1,?,1) ON CONFLICT(ip_hash) DO UPDATE SET minute_count=CASE WHEN minute_bucket=excluded.minute_bucket THEN minute_count+1 ELSE 1 END,minute_bucket=excluded.minute_bucket,day_count=CASE WHEN day_bucket=excluded.day_bucket THEN day_count+1 ELSE 1 END,day_bucket=excluded.day_bucket RETURNING minute_count,day_count",
+  )
+    .bind(ipHash, minuteBucket, dayBucket)
+    .first();
+  if (Number(limit?.minute_count) > 8 || Number(limit?.day_count) > 40)
+    return Response.json(
+      { error: "Забагато запитів. Спробуйте трохи пізніше." },
+      { status: 429 },
+    );
+
+  try {
+    const answer = await ask(env, chatId, question);
+    return Response.json({ answer });
+  } catch (error) {
+    console.error("DASHBOARD_AI", error?.message || error);
+    return Response.json(
+      { error: "AI-помічник тимчасово недоступний. Спробуйте ще раз пізніше." },
+      { status: 503 },
+    );
+  }
+}
 
 export default {
   async fetch(req, e) {
     await schema(e);
     const u = new URL(req.url);
+    if (u.pathname.startsWith("/internal/web-chat"))
+      return dashboardChat(req, e, u);
     if (u.pathname === "/")
       return Response.json({
         service: "Home Monitor",
