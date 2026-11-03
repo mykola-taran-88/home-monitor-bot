@@ -100,12 +100,9 @@ function asksDeviceStatus(question) {
 }
 
 async function currentDeviceStatusAnswer(e, id, question) {
-  const [deviceResult, climateResult, power, timeoutRow] = await Promise.all([
+  const [deviceResult, power, timeoutRow] = await Promise.all([
       e.DB.prepare(
         "SELECT device_id,device_name,device_type,is_outdoor,last_seen FROM devices WHERE enabled=1 ORDER BY display_order,id LIMIT 100",
-      ).all(),
-      e.DB.prepare(
-        "SELECT device_id,temperature,humidity,created_at FROM climate_logs WHERE device_id IN (SELECT device_id FROM devices WHERE enabled=1 AND device_type='climate') ORDER BY id DESC LIMIT 100",
       ).all(),
       e.DB.prepare(
         "SELECT power,voltage,created_at FROM power_logs ORDER BY id DESC LIMIT 1",
@@ -115,12 +112,22 @@ async function currentDeviceStatusAnswer(e, id, question) {
       ).first(),
     ]),
     timeout = Math.max(1, Number(timeoutRow?.setting_value) || 15),
-    climateByDevice = new Map();
-  for (const row of climateResult.results || [])
-    if (!climateByDevice.has(row.device_id))
-      climateByDevice.set(row.device_id, row);
+    devices = deviceResult.results || [],
+    climateRows = await Promise.all(
+      devices
+        .filter((device) => device.device_type === "climate")
+        .map((device) =>
+          e.DB.prepare(
+            "SELECT temperature,humidity,created_at FROM climate_logs WHERE device_id=? ORDER BY id DESC LIMIT 1",
+          )
+            .bind(device.device_id)
+            .first()
+            .then((row) => [device.device_id, row]),
+        ),
+    ),
+    climateByDevice = new Map(climateRows);
 
-  const items = (deviceResult.results || []).map((device) => {
+  const items = devices.map((device) => {
     const isClimate = device.device_type === "climate",
       isPower = ["power", "energy", "pzem"].includes(device.device_type),
       climate = climateByDevice.get(device.device_id),
